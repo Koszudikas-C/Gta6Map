@@ -140,7 +140,12 @@
 
         <div class="map-fold fold-3 hud-panel">
           <section class="poi-filters" aria-label="Camadas de Leonida">
-            <span class="filters-heading font-mono-tactical">CAMADAS DE LEONIDA</span>
+            <div class="filters-header">
+              <span class="filters-heading font-mono-tactical">CAMADAS DE LEONIDA</span>
+              <span class="filters-count font-mono-tactical">
+                {{ mapService.visiblePoisCount() }}/{{ mapService.totalPoisCount() }}
+              </span>
+            </div>
             <div class="filter-chips">
               @for (category of quickCategories; track category) {
                 <button
@@ -152,6 +157,27 @@
                   {{ category }}
                 </button>
               }
+            </div>
+            <div class="filters-header" style="margin-top: 8px;">
+              <span class="filters-heading font-mono-tactical">QUALIDADE DO MAPA</span>
+            </div>
+            <div class="filter-chips">
+              <button
+                type="button"
+                class="filter-chip"
+                [class.is-active]="mapService.qualityMode() === 'light'"
+                (click)="mapService.setQualityMode('light')"
+              >
+                Leve
+              </button>
+              <button
+                type="button"
+                class="filter-chip"
+                [class.is-active]="mapService.qualityMode() === 'hd'"
+                (click)="mapService.setQualityMode('hd')"
+              >
+                Nítido HD
+              </button>
             </div>
           </section>
         </div>
@@ -189,6 +215,36 @@
         <lucide-icon [img]="icons.Compass" [size]="18" [strokeWidth]="1.75" />
       </button>
     </div>
+
+    <a
+      class="gtadb-attribution font-mono-tactical"
+      href="https://map.gtadb.org"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      Mapa &amp; Landmarks: gtadb.org (CC BY 4.0)
+    </a>
+
+    <!-- POI Detail Mini-Card -->
+    @if (mapService.selectedPoi(); as poi) {
+      <article class="poi-card hud-panel" aria-label="Detalhes do ponto de interesse">
+        <header class="poi-card-header">
+          <div>
+            <span class="poi-badge font-mono-tactical">{{ poi.category }} · {{ poi.region }}</span>
+            <h2 class="poi-title font-display">{{ poi.name }}</h2>
+          </div>
+          <button
+            type="button"
+            class="icon-btn"
+            (click)="mapService.selectedPoi.set(null)"
+            aria-label="Fechar detalhes do POI"
+          >
+            <lucide-icon [img]="icons.Crosshair" [size]="16" [strokeWidth]="1.75" />
+          </button>
+        </header>
+        <p class="poi-desc">{{ poi.description }}</p>
+      </article>
+    }
 
     <!-- Platform-specific Bottom HUD -->
     @switch (platform.mode()) {

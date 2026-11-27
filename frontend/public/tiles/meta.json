@@ -1,0 +1,16 @@
+{
+  "source": "gtadb.org (CC BY 4.0)",
+  "tileSize": 512,
+  "minZoom": 0,
+  "maxZoom": 5,
+  "landmarksCount": 985,
+  "styles": [
+    {
+      "id": "day",
+      "label": "Leonida",
+      "oceanColor": "#2F90B0",
+      "tiles": 1365,
+      "sizeMb": 4.88
+    }
+  ]
+}

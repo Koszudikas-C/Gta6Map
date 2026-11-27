@@ -6,7 +6,10 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "jest"
+    "test": "jest",
+    "slice-map": "node scripts/slice-map-tiles.mjs",
+    "import-gtadb": "node scripts/import-gtadb-map.mjs",
+    "generate-dem": "node scripts/generate-leonida-dem.mjs"
   },
   "private": true,
   "packageManager": "npm@11.19.1",
@@ -33,6 +36,7 @@
     "jest-preset-angular": "^17.0.3",
     "jsdom": "^30.0.0",
     "prettier": "^3.8.1",
+    "sharp": "^0.35.5",
     "ts-node": "^10.9.2",
     "typescript": "~6.0.2",
     "vitest": "^5.1.2"

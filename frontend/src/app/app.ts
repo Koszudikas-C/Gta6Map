@@ -24,6 +24,7 @@ import {
   Search,
   LucideAngularModule,
 } from 'lucide-angular';
+import { POI_CATEGORIES } from './core/data/leonida-map.data';
 import { GamepadService } from './core/services/gamepad.service';
 import { MapService } from './core/services/map.service';
 import { PlatformContextService } from './core/services/platform-context.service';
@@ -68,8 +69,8 @@ export class App implements AfterViewInit, OnDestroy {
   readonly searchQuery = signal('');
   readonly clickBursts = signal<{ id: number; x: number; y: number }[]>([]);
   private burstId = 0;
-  readonly quickCategories = ['Missões', 'Armas', 'Colecionáveis', 'Lojas', 'Eventos'] as const;
-  readonly selectedCategory = signal<string>('Missões');
+  readonly quickCategories = POI_CATEGORIES;
+  readonly selectedCategory = signal<string>('Todas');
 
   readonly icons = {
     Box,
@@ -153,10 +154,12 @@ export class App implements AfterViewInit, OnDestroy {
   onSearchInput(event: Event): void {
     const target = event.target as HTMLInputElement;
     this.searchQuery.set(target.value);
+    this.mapService.filterPois(target.value, this.selectedCategory());
   }
 
   selectCategory(category: string): void {
     this.selectedCategory.set(category);
+    this.mapService.filterPois(this.searchQuery(), category);
   }
 
   @HostListener('document:click', ['$event'])
