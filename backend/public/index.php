@@ -14,6 +14,7 @@ use App\Http\Controller\PoiController;
 use App\Http\Controller\ProfileController;
 use App\Http\Controller\ProgressController;
 use App\Http\Controller\ShareController;
+use App\Http\Controller\SwaggerController;
 use App\Http\Controller\TelemetryController;
 use App\Http\JsonResponse;
 use App\Http\RateLimiter;
@@ -121,9 +122,12 @@ try {
         $appBaseUrl,
         $env->getString('OG_DEFAULT_IMAGE_URL', rtrim($appBaseUrl, '/') . '/assets/og-leonida.webp')
     );
+    $swaggerController = new SwaggerController(dirname($backendRoot) . '/docs/openapi.json');
 
     $router = new Router();
     $router->get('/api/health', [$healthController, 'handle']);
+    $router->get('/api/openapi.json', [$swaggerController, 'spec']);
+    $router->get('/api/docs', [$swaggerController, 'ui']);
     $router->post('/api/telemetry/client-error', static fn (Request $req): ResponseInterface => $rateLimiter->limit(
         $req,
         'telemetry_client_error',

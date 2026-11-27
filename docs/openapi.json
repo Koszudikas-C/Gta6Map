@@ -1,0 +1,508 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Gta6Map (Leonida) REST API",
+    "version": "0.1.0",
+    "description": "Stateless PHP 8.5+ & MySQL 8.0+ REST API for the interactive GTA 6 (Leonida) 2.5D/3D map, Google OAuth 2.0 auth, VIP cloud progress, custom pins, telemetry, and dynamic OpenGraph sharing."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Local PHP Development Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error", "message", "request_id"],
+        "properties": {
+          "error": { "type": "string" },
+          "message": { "type": "string" },
+          "code": { "type": "string" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "RateLimitErrorResponse": {
+        "type": "object",
+        "required": ["error", "message", "retry_after", "request_id"],
+        "properties": {
+          "error": { "type": "string", "example": "Too Many Requests" },
+          "message": { "type": "string" },
+          "retry_after": { "type": "integer", "example": 42 },
+          "request_id": { "type": "string" }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": ["status", "service", "environment", "request_id", "timestamp", "checks"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok", "degraded"] },
+          "service": { "type": "string", "example": "gta6map-api" },
+          "environment": { "type": "string", "example": "production" },
+          "request_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "database": {
+                "type": "object",
+                "properties": {
+                  "status": { "type": "string", "enum": ["up", "down"] },
+                  "latency_ms": { "type": "number" }
+                }
+              },
+              "storage": {
+                "type": "object",
+                "properties": {
+                  "status": { "type": "string" },
+                  "free_mb": { "type": "number", "nullable": true }
+                }
+              },
+              "poi_cache": {
+                "type": "object",
+                "properties": {
+                  "status": { "type": "string", "enum": ["warm", "cold"] },
+                  "size_bytes": { "type": "integer" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "ClientTelemetryEvent": {
+        "type": "object",
+        "required": ["level", "source", "message"],
+        "properties": {
+          "level": { "type": "string", "enum": ["error", "warn", "perf"] },
+          "source": { "type": "string", "enum": ["js", "webgl", "http", "rum"] },
+          "message": { "type": "string", "maxLength": 1000 },
+          "stack": { "type": "string", "maxLength": 4000 },
+          "route": { "type": "string", "example": "/" },
+          "deviceType": { "type": "string", "enum": ["desktop", "mobile", "console"] },
+          "gamepadConnected": { "type": "boolean" },
+          "buildVersion": { "type": "string", "example": "0.1.0-alpha" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TelemetryBatchRequest": {
+        "type": "object",
+        "required": ["events"],
+        "properties": {
+          "events": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": { "$ref": "#/components/schemas/ClientTelemetryEvent" }
+          }
+        }
+      },
+      "GoogleAuthRequest": {
+        "type": "object",
+        "required": ["id_token"],
+        "properties": {
+          "id_token": { "type": "string" },
+          "ref": { "type": "string", "example": "LEO7X9K2" }
+        }
+      },
+      "UserProfile": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "avatar_url": { "type": "string", "nullable": true },
+          "psn_id": { "type": "string", "nullable": true },
+          "has_cpf": { "type": "boolean" },
+          "role": { "type": "string", "enum": ["USER", "ADMIN"] },
+          "is_vip": { "type": "boolean" },
+          "referral_code": { "type": "string", "example": "LEO7X9K2" },
+          "referred_by_user_id": { "type": "string", "format": "uuid", "nullable": true },
+          "created_at": { "type": "string" },
+          "referrals_count": { "type": "integer" }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string" },
+          "token_type": { "type": "string", "example": "Bearer" },
+          "expires_in": { "type": "integer", "example": 604800 },
+          "user": { "$ref": "#/components/schemas/UserProfile" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "UpdateProfileRequest": {
+        "type": "object",
+        "required": ["psn_id"],
+        "properties": {
+          "psn_id": { "type": "string", "nullable": true, "example": "Jason_Vice6" }
+        }
+      },
+      "PoiCategory": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "slug": { "type": "string", "example": "armas" },
+          "name": { "type": "string", "example": "Armas" },
+          "icon_name": { "type": "string", "example": "crosshair" },
+          "color_hex": { "type": "string", "example": "#FF4D6D" },
+          "sort_order": { "type": "integer" }
+        }
+      },
+      "Poi": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "category_id": { "type": "integer" },
+          "category_slug": { "type": "string" },
+          "category_name": { "type": "string" },
+          "title": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "coord_x": { "type": "number", "format": "double", "description": "Calibrated longitude" },
+          "coord_y": { "type": "number", "format": "double", "description": "Calibrated latitude" },
+          "image_url": { "type": "string", "nullable": true },
+          "panorama_url": { "type": "string", "nullable": true },
+          "metadata": { "type": "object", "additionalProperties": true },
+          "status": { "type": "string", "enum": ["PUBLISHED", "PENDING", "REJECTED"] },
+          "created_at": { "type": "string" },
+          "updated_at": { "type": "string" }
+        }
+      },
+      "ProgressResponse": {
+        "type": "object",
+        "properties": {
+          "save_slot": { "type": "string", "example": "default" },
+          "poi_ids": { "type": "array", "items": { "type": "integer" } },
+          "count": { "type": "integer" },
+          "request_id": { "type": "string" }
+        }
+      },
+      "SyncProgressRequest": {
+        "type": "object",
+        "required": ["poi_ids"],
+        "properties": {
+          "save_slot": { "type": "string", "default": "default" },
+          "poi_ids": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+          "mode": { "type": "string", "enum": ["replace", "merge"], "default": "replace" }
+        }
+      },
+      "CustomPin": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "user_id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "notes": { "type": "string", "nullable": true },
+          "coord_x": { "type": "number", "format": "double" },
+          "coord_y": { "type": "number", "format": "double" },
+          "color_hex": { "type": "string", "example": "#00D2D3" },
+          "created_at": { "type": "string" }
+        }
+      },
+      "CreateCustomPinRequest": {
+        "type": "object",
+        "required": ["title", "coord_x", "coord_y"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 120 },
+          "notes": { "type": "string", "maxLength": 1000, "nullable": true },
+          "coord_x": { "type": "number", "format": "double" },
+          "coord_y": { "type": "number", "format": "double" },
+          "color_hex": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$", "default": "#00D2D3" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["Observability"],
+        "summary": "System healthcheck",
+        "responses": {
+          "200": {
+            "description": "Service healthy",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+          },
+          "503": {
+            "description": "Database degraded",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+          }
+        }
+      }
+    },
+    "/api/telemetry/client-error": {
+      "post": {
+        "tags": ["Observability"],
+        "summary": "Ingest frontend client telemetry batch (30 req/min/IP)",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TelemetryBatchRequest" } } }
+        },
+        "responses": {
+          "202": { "description": "Telemetry accepted" },
+          "400": { "description": "Invalid JSON", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "422": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "429": { "description": "Rate limit exceeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RateLimitErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/auth/google": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Authenticate with Google OAuth 2.0 ID token (15 req/min/IP)",
+        "parameters": [
+          { "name": "ref", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoogleAuthRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Authenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthResponse" } } } },
+          "400": { "description": "Invalid JSON", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Invalid Google ID token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "422": { "description": "Missing id_token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "429": { "description": "Rate limit exceeded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RateLimitErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "tags": ["Profile"],
+        "summary": "Get authenticated user profile and referral stats",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "User profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": { "$ref": "#/components/schemas/UserProfile" },
+                    "request_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Not Found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "patch": {
+        "tags": ["Profile"],
+        "summary": "Update authenticated user psn_id",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateProfileRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Updated profile" },
+          "400": { "description": "Invalid JSON", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "422": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/categories": {
+      "get": {
+        "tags": ["POIs"],
+        "summary": "List POI categories ordered by sort_order",
+        "responses": {
+          "200": {
+            "description": "Categories list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "categories": { "type": "array", "items": { "$ref": "#/components/schemas/PoiCategory" } },
+                    "request_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pois": {
+      "get": {
+        "tags": ["POIs"],
+        "summary": "List published POIs from JSON cache with optional category and search filters",
+        "parameters": [
+          { "name": "category", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "q", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published POIs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pois": { "type": "array", "items": { "$ref": "#/components/schemas/Poi" } },
+                    "total": { "type": "integer" },
+                    "request_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pois/{id}": {
+      "get": {
+        "tags": ["POIs"],
+        "summary": "Get single published POI by numeric id",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "POI detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "poi": { "$ref": "#/components/schemas/Poi" },
+                    "request_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/progress": {
+      "get": {
+        "tags": ["VIP Cloud Sync"],
+        "summary": "Get VIP user POI checklist progress for a save_slot",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "save_slot", "in": "query", "required": false, "schema": { "type": "string", "default": "default" } }
+        ],
+        "responses": {
+          "200": { "description": "Progress list", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProgressResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "VIP required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "put": {
+        "tags": ["VIP Cloud Sync"],
+        "summary": "Synchronize VIP user POI checklist progress",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncProgressRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Synchronized progress", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProgressResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "VIP required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "422": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/custom-pins": {
+      "get": {
+        "tags": ["VIP Custom Pins"],
+        "summary": "List VIP user custom map pins",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Custom pins list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pins": { "type": "array", "items": { "$ref": "#/components/schemas/CustomPin" } },
+                    "request_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "VIP required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "post": {
+        "tags": ["VIP Custom Pins"],
+        "summary": "Create a VIP user custom map pin",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCustomPinRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Custom pin created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pin": { "$ref": "#/components/schemas/CustomPin" },
+                    "request_id": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "VIP required", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "422": { "description": "Validation error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/custom-pins/{id}": {
+      "delete": {
+        "tags": ["VIP Custom Pins"],
+        "summary": "Delete an owned VIP custom map pin",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": {
+          "200": { "description": "Deleted" },
+          "400": { "description": "Invalid UUID", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Forbidden (non-VIP or not owner)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/share": {
+      "get": {
+        "tags": ["Deep Linking & SEO"],
+        "summary": "Render dynamic OpenGraph HTML for social crawlers (WhatsApp, Discord, Googlebot)",
+        "parameters": [
+          { "name": "poi", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "HTML page with OpenGraph meta tags",
+            "content": { "text/html": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    }
+  }
+}
