@@ -28,9 +28,9 @@
       class="hud-panel backpack-trigger"
       [class.is-open]="sidebarOpen() || wheelOpen()"
       (click)="toggleSidebar()"
-      [attr.data-tooltip]="(sidebarOpen() || wheelOpen()) ? 'Guardar Mapa na Mochila (M)' : 'Abrir Mapa da Mochila (M)'"
+      [attr.data-tooltip]="(sidebarOpen() || wheelOpen()) ? 'Fechar Mochila (M)' : 'Abrir Mochila (M)'"
       [attr.aria-expanded]="sidebarOpen() || wheelOpen()"
-      [attr.aria-label]="(sidebarOpen() || wheelOpen()) ? 'Guardar mapa na mochila' : 'Abrir mapa da mochila'"
+      [attr.aria-label]="(sidebarOpen() || wheelOpen()) ? 'Fechar mochila' : 'Abrir mochila'"
     >
       @if (sidebarOpen() || wheelOpen()) {
         <svg
