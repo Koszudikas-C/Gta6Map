@@ -90,6 +90,7 @@ export class App implements AfterViewInit, OnDestroy {
       onFocusSearch: () => this.focusSearch(),
       onToggleCinema: () => this.toggleCinemaMode(),
       onToggleSidebar: () => this.toggleSidebar(),
+      onCursorClick: (x, y) => this.triggerGamepadClick(x, y),
     });
   }
 
@@ -184,13 +185,25 @@ export class App implements AfterViewInit, OnDestroy {
     }
   }
 
-  @HostListener('window:pointerdown', ['$event'])
-  onPointerDown(event: PointerEvent): void {
+  private spawnBurst(x: number, y: number): void {
     const id = ++this.burstId;
-    this.clickBursts.update((list) => [...list, { id, x: event.clientX, y: event.clientY }]);
+    this.clickBursts.update((list) => [...list, { id, x, y }]);
     setTimeout(() => {
       this.clickBursts.update((list) => list.filter((b) => b.id !== id));
     }, 320);
+  }
+
+  triggerGamepadClick(x: number, y: number): void {
+    this.spawnBurst(x, y);
+    if (isPlatformBrowser(this.platformId)) {
+      const el = document.elementFromPoint(x, y) as HTMLElement | null;
+      el?.click();
+    }
+  }
+
+  @HostListener('window:pointerdown', ['$event'])
+  onPointerDown(event: PointerEvent): void {
+    this.spawnBurst(event.clientX, event.clientY);
   }
 
   @HostListener('window:keydown', ['$event'])

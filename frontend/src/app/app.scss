@@ -18,6 +18,16 @@
   height: 100%;
 }
 
+.gamepad-cursor {
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  pointer-events: none;
+  z-index: 70;
+  filter: drop-shadow(0 0 8px rgba(244, 78, 143, 0.7));
+}
+
 .click-burst {
   position: fixed;
   width: 34px;

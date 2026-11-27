@@ -201,7 +201,8 @@ export type WheelAction = 'map' | 'filters' | '3d' | 'cinema';
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
-        opacity: 0.12;
+        opacity: 0.24;
+        filter: drop-shadow(0 0 18px rgba(243, 106, 120, 0.22));
         pointer-events: none;
         user-select: none;
       }

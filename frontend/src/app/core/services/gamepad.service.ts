@@ -11,6 +11,7 @@ export interface GamepadActions {
   onFocusSearch?: () => void;
   onToggleCinema?: () => void;
   onToggleSidebar?: () => void;
+  onCursorClick?: (x: number, y: number) => void;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -23,12 +24,15 @@ export class GamepadService {
   private r3WasPressed = false;
   private r1WasPressed = false;
   private l1WasPressed = false;
+  private aWasPressed = false;
   private cinemaWasPressed = false;
   private actions: GamepadActions = {};
 
   readonly connected = signal(false);
   readonly controllerName = signal<string | null>(null);
   readonly controllerType = signal<ControllerType>('generic');
+  readonly cursorX = signal(typeof window !== 'undefined' ? window.innerWidth / 2 : 640);
+  readonly cursorY = signal(typeof window !== 'undefined' ? window.innerHeight / 2 : 360);
   readonly legends = computed<GamepadLegendItem[]>(() => {
     switch (this.controllerType()) {
       case 'playstation':
@@ -118,63 +122,83 @@ export class GamepadService {
 
     this.ngZone.runOutsideAngular(() => {
       const poll = (): void => {
-        const pads = navigator.getGamepads?.() ?? [];
-        const pad = Array.from(pads).find((p) => p !== null);
-
+        const pad = this.getActiveGamepad();
         if (pad) {
-          const rawX = pad.axes[0] ?? 0;
-          const rawY = pad.axes[1] ?? 0;
-          const dx = Math.abs(rawX) > DEADZONE ? rawX * 14 : 0;
-          const dy = Math.abs(rawY) > DEADZONE ? rawY * 14 : 0;
-
-          if (dx !== 0 || dy !== 0) {
-            this.mapService.panBy(dx, dy);
-          }
-
-          // Zoom via Right Stick Y (axis 3) or L2/R2 triggers (buttons 6/7)
-          const rightStickY = pad.axes[3] ?? 0;
-          const l2Value = pad.buttons[6]?.value ?? 0;
-          const r2Value = pad.buttons[7]?.value ?? 0;
-          if (Math.abs(rightStickY) > DEADZONE) {
-            this.mapService.zoomBy(-rightStickY * 0.08);
-          } else if (r2Value > DEADZONE || l2Value > DEADZONE) {
-            this.mapService.zoomBy((r2Value - l2Value) * 0.08);
-          }
-
-          // L1 / LB -> Toggle Sidebar
-          const l1Pressed = Boolean(pad.buttons[4]?.pressed);
-          if (l1Pressed && !this.l1WasPressed) {
-            this.ngZone.run(() => this.actions.onToggleSidebar?.());
-          }
-          this.l1WasPressed = l1Pressed;
-
-          // R1 / RB -> Focus Search
-          const r1Pressed = Boolean(pad.buttons[5]?.pressed);
-          if (r1Pressed && !this.r1WasPressed) {
-            this.ngZone.run(() => this.actions.onFocusSearch?.());
-          }
-          this.r1WasPressed = r1Pressed;
-
-          // R3 -> Toggle 2D/3D
-          const r3Pressed = Boolean(pad.buttons[11]?.pressed);
-          if (r3Pressed && !this.r3WasPressed) {
-            this.ngZone.run(() => this.mapService.toggle3D());
-          }
-          this.r3WasPressed = r3Pressed;
-
-          // Y / Triangle (3) or Select / Back (8) -> Toggle Cinema / Fullscreen
-          const cinemaPressed = Boolean(pad.buttons[3]?.pressed || pad.buttons[8]?.pressed);
-          if (cinemaPressed && !this.cinemaWasPressed) {
-            this.ngZone.run(() => this.actions.onToggleCinema?.());
-          }
-          this.cinemaWasPressed = cinemaPressed;
+          this.updateVirtualCursor(pad);
+          this.updateMapZoom(pad);
+          this.processActionButtons(pad);
         }
-
         this.rafId = requestAnimationFrame(poll);
       };
 
       this.rafId = requestAnimationFrame(poll);
     });
+  }
+
+  private getActiveGamepad(): Gamepad | undefined {
+    const pads = navigator.getGamepads?.() ?? [];
+    return Array.from(pads).find((p) => p !== null);
+  }
+
+  private updateVirtualCursor(pad: Gamepad): void {
+    const rawX = pad.axes[0] ?? 0;
+    const rawY = pad.axes[1] ?? 0;
+    if (Math.abs(rawX) <= DEADZONE && Math.abs(rawY) <= DEADZONE) {
+      return;
+    }
+
+    const nextX = Math.max(0, Math.min(window.innerWidth, this.cursorX() + rawX * 10));
+    const nextY = Math.max(0, Math.min(window.innerHeight, this.cursorY() + rawY * 10));
+    this.ngZone.run(() => {
+      this.cursorX.set(nextX);
+      this.cursorY.set(nextY);
+    });
+  }
+
+  private updateMapZoom(pad: Gamepad): void {
+    const rightStickY = pad.axes[3] ?? 0;
+    const l2Value = pad.buttons[6]?.value ?? 0;
+    const r2Value = pad.buttons[7]?.value ?? 0;
+
+    if (Math.abs(rightStickY) > DEADZONE) {
+      this.mapService.zoomBy(-rightStickY * 0.08);
+    } else if (r2Value > DEADZONE || l2Value > DEADZONE) {
+      this.mapService.zoomBy((r2Value - l2Value) * 0.08);
+    }
+  }
+
+  private processActionButtons(pad: Gamepad): void {
+    const aPressed = Boolean(pad.buttons[0]?.pressed);
+    if (aPressed && !this.aWasPressed) {
+      const x = this.cursorX();
+      const y = this.cursorY();
+      this.ngZone.run(() => this.actions.onCursorClick?.(x, y));
+    }
+    this.aWasPressed = aPressed;
+
+    const l1Pressed = Boolean(pad.buttons[4]?.pressed);
+    if (l1Pressed && !this.l1WasPressed) {
+      this.ngZone.run(() => this.actions.onToggleSidebar?.());
+    }
+    this.l1WasPressed = l1Pressed;
+
+    const r1Pressed = Boolean(pad.buttons[5]?.pressed);
+    if (r1Pressed && !this.r1WasPressed) {
+      this.ngZone.run(() => this.actions.onFocusSearch?.());
+    }
+    this.r1WasPressed = r1Pressed;
+
+    const r3Pressed = Boolean(pad.buttons[11]?.pressed);
+    if (r3Pressed && !this.r3WasPressed) {
+      this.ngZone.run(() => this.mapService.toggle3D());
+    }
+    this.r3WasPressed = r3Pressed;
+
+    const cinemaPressed = Boolean(pad.buttons[3]?.pressed || pad.buttons[8]?.pressed);
+    if (cinemaPressed && !this.cinemaWasPressed) {
+      this.ngZone.run(() => this.actions.onToggleCinema?.());
+    }
+    this.cinemaWasPressed = cinemaPressed;
   }
 
   private stopPolling(): void {
