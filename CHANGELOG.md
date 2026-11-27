@@ -4,6 +4,16 @@ All notable changes to the **Gta6Map (Leonida)** project will be documented in t
 
 ## [0.1.0] - 2026-11-27
 
+### Added (Frontend HUD — Custom Pins, Mobile Rotary Dial & O(1) Quick Search)
+- **Custom Map Pins (`map.service.ts`, `custom-pin-popup.helper.ts`, `range-target-close-button.component.ts`)**: Added persistent custom pins with customizable title, notes, color, icon, zoom-adaptive marker sizing, and range-target close animation.
+- **Weapon Wheel & Mobile Rotary Dial (`weapon-wheel.component.ts`, `map-rotary-dial.component.ts`)**: Added desktop pin submenu with locked fan handling and mobile rotary telephone dial navigation with GTA VI glow animation.
+- **O(1) Quick Search (`quick-search.component.ts`, `map.service.ts`)**: Added accent-insensitive prefix hash index (`Map<string, LeonidaPoi[]>`) and animated quick search modal with `Categorias`, `Recentes`, and `Acessados` tabs.
+
+### Added (OpenAPI 3.0 & Swagger UI)
+- **OpenAPI Spec (`docs/openapi.json`)**: Complete OpenAPI 3.0.3 specification covering all Phase 1–3 endpoints (`/api/health`, `/api/telemetry/client-error`, `/api/auth/google`, `/api/me`, `/api/categories`, `/api/pois`, `/api/pois/{id}`, `/api/progress`, `/api/custom-pins`, `/api/custom-pins/{id}`, `/share`).
+- **Swagger Controller (`backend/src/Http/Controller/SwaggerController.php`, `backend/public/index.php`)**: Added `GET /api/openapi.json` and `GET /api/docs` (Swagger UI via `swagger-ui-dist@5` with compatible CSP headers).
+- **Tests & Docs**: Added `SwaggerControllerTest` (`backend/tests/Http/SwaggerControllerTest.php`) and linked spec in `docs/API.md`.
+
 ### Added (Vicemap Importer & Offline Cache Fallback)
 - **Importer & Coordinate Calibration (`backend/bin/import-vicemap.php`, `backend/src/Service/VicemapImporter.php`)**: Imports `vicemap.online/data.json` (or `--file=`), calibrates canvas `(x, y)` to `day` tile WebMercator `(lng, lat)`, maps 44 source categories into 22 clean `pt-BR` categories, generates `backend/storage/cache/pois.json` and idempotent `database/seeds/002_vicemap_pois.sql`.
 - **Offline Fallback (`PoiCacheService`, `PoiController`)**: `GET /api/pois` and `GET /api/categories` seamlessly serve `backend/storage/cache/pois.json` when MySQL is disconnected or empty.
