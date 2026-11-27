@@ -8,7 +8,6 @@ use App\Http\JsonResponse;
 use App\Http\Request;
 use App\Repository\PoiCategoryRecord;
 use App\Repository\PoiRecord;
-use App\Repository\PoiRepositoryInterface;
 use App\Service\PoiCacheService;
 
 /**
@@ -17,7 +16,6 @@ use App\Service\PoiCacheService;
 final class PoiController
 {
     public function __construct(
-        private readonly PoiRepositoryInterface $poiRepository,
         private readonly PoiCacheService $poiCache,
     ) {
     }
@@ -26,7 +24,7 @@ final class PoiController
     {
         $categories = array_map(
             static fn (PoiCategoryRecord $cat): array => $cat->toPublicArray(),
-            $this->poiRepository->findAllCategories()
+            $this->poiCache->getCategories()
         );
 
         return new JsonResponse(200, [

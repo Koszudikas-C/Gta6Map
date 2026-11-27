@@ -4,6 +4,11 @@ All notable changes to the **Gta6Map (Leonida)** project will be documented in t
 
 ## [0.1.0] - 2026-11-27
 
+### Added (Vicemap Importer & Offline Cache Fallback)
+- **Importer & Coordinate Calibration (`backend/bin/import-vicemap.php`, `backend/src/Service/VicemapImporter.php`)**: Imports `vicemap.online/data.json` (or `--file=`), calibrates canvas `(x, y)` to `day` tile WebMercator `(lng, lat)`, maps 44 source categories into 22 clean `pt-BR` categories, generates `backend/storage/cache/pois.json` and idempotent `database/seeds/002_vicemap_pois.sql`.
+- **Offline Fallback (`PoiCacheService`, `PoiController`)**: `GET /api/pois` and `GET /api/categories` seamlessly serve `backend/storage/cache/pois.json` when MySQL is disconnected or empty.
+- **Tests & Docs**: Added `VicemapImporterAndOfflineFallbackTest` (`backend/tests/Service/VicemapImporterAndOfflineFallbackTest.php`) and updated `docs/API.md`.
+
 ### Added (Phase 3 — Public POIs Cache, VIP Cloud Progress, Custom Pins & OpenGraph)
 - **HTTP Infrastructure (`ResponseInterface`, `HtmlResponse`, `Router`, `Request`, `AuthMiddleware`)**: Added parameterized `{id}` routing, `put`/`delete` methods, `HtmlResponse`, and `AuthMiddleware::requireVip()` (`403 VIP_REQUIRED` for non-VIP accounts).
 - **Public POIs & JSON Cache (`PoiRepository`, `PoiCacheService`, `PoiController`)**: Added `GET /api/categories`, `GET /api/pois` (with `category` and `q` filtering backed by `backend/storage/cache/pois.json` + `invalidate()`), and `GET /api/pois/{id}`.

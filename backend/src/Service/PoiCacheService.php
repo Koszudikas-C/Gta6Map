@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Repository\PoiCategoryRecord;
 use App\Repository\PoiRecord;
 use App\Repository\PoiRepositoryInterface;
 use Closure;
 use JsonException;
+use Throwable;
 
 /**
- * File-backed JSON cache for published POIs (backend/storage/cache/pois.json).
+ * File-backed JSON cache for published POIs and categories (backend/storage/cache/pois.json).
+ * Falls back cleanly to existing cache data when MySQL is unavailable or empty.
  */
 final class PoiCacheService
 {
@@ -30,19 +33,68 @@ final class PoiCacheService
     }
 
     /**
+     * @return list<PoiCategoryRecord>
+     */
+    public function getCategories(): array
+    {
+        try {
+            $fromDb = $this->poiRepository->findAllCategories();
+            if ($fromDb !== []) {
+                return $fromDb;
+            }
+        } catch (Throwable) {
+            // Fall back to cache file categories when MySQL is unavailable locally
+        }
+
+        $decoded = $this->readDecodedCacheFile();
+        if ($decoded === null) {
+            return [];
+        }
+
+        if (isset($decoded['categories']) && is_array($decoded['categories'])) {
+            $categories = [];
+            foreach ($decoded['categories'] as $row) {
+                if (is_array($row)) {
+                    /** @var array<string, mixed> $row */
+                    $categories[] = PoiCategoryRecord::fromRow($row);
+                }
+            }
+            if ($categories !== []) {
+                usort($categories, static fn (PoiCategoryRecord $a, PoiCategoryRecord $b): int => $a->sortOrder <=> $b->sortOrder);
+
+                return $categories;
+            }
+        }
+
+        return $this->deriveCategoriesFromPois($this->extractPoisFromDecoded($decoded));
+    }
+
+    /**
      * @return list<PoiRecord>
      */
     public function getPublishedPois(): array
     {
-        $cached = $this->readValidCache();
-        if ($cached !== null) {
-            return $cached;
+        $decoded = $this->readDecodedCacheFile();
+        if ($decoded !== null && $this->isFresh($decoded)) {
+            return $this->extractPoisFromDecoded($decoded);
         }
 
-        $pois = $this->poiRepository->findAllPublishedPois();
-        $this->writeCache($pois);
+        try {
+            $pois = $this->poiRepository->findAllPublishedPois();
+            if ($pois !== []) {
+                $this->writeCache($pois);
 
-        return $pois;
+                return $pois;
+            }
+        } catch (Throwable) {
+            // Fall back to stale cache file when MySQL is unavailable locally
+        }
+
+        if ($decoded !== null) {
+            return $this->extractPoisFromDecoded($decoded);
+        }
+
+        return [];
     }
 
     /**
@@ -138,11 +190,11 @@ final class PoiCacheService
     }
 
     /**
-     * @return list<PoiRecord>|null
+     * @return array<string, mixed>|null
      */
-    private function readValidCache(): ?array
+    private function readDecodedCacheFile(): ?array
     {
-        if ($this->ttlSeconds <= 0 || !is_file($this->cacheFilePath) || !is_readable($this->cacheFilePath)) {
+        if (!is_file($this->cacheFilePath) || !is_readable($this->cacheFilePath)) {
             return null;
         }
 
@@ -157,22 +209,39 @@ final class PoiCacheService
             return null;
         }
 
-        if (
-            !is_array($decoded)
-            || !isset($decoded['generated_at'], $decoded['pois'])
-            || !is_int($decoded['generated_at'])
-            || !is_array($decoded['pois'])
-        ) {
+        if (!is_array($decoded) || !isset($decoded['pois']) || !is_array($decoded['pois'])) {
             return null;
         }
 
-        $now = ($this->clock)();
-        if (($now - $decoded['generated_at']) >= $this->ttlSeconds) {
-            return null;
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
+    }
+
+    /**
+     * @param array<string, mixed> $decoded
+     */
+    private function isFresh(array $decoded): bool
+    {
+        if ($this->ttlSeconds <= 0 || !isset($decoded['generated_at']) || !is_int($decoded['generated_at'])) {
+            return false;
         }
 
+        return (($this->clock)() - $decoded['generated_at']) < $this->ttlSeconds;
+    }
+
+    /**
+     * @param array<string, mixed> $decoded
+     * @return list<PoiRecord>
+     */
+    private function extractPoisFromDecoded(array $decoded): array
+    {
         $records = [];
-        foreach ($decoded['pois'] as $item) {
+        $poisRaw = $decoded['pois'] ?? [];
+        if (!is_array($poisRaw)) {
+            return [];
+        }
+
+        foreach ($poisRaw as $item) {
             if (is_array($item)) {
                 /** @var array<string, mixed> $item */
                 $records[] = PoiRecord::fromRow($item);
@@ -180,6 +249,31 @@ final class PoiCacheService
         }
 
         return $records;
+    }
+
+    /**
+     * @param list<PoiRecord> $pois
+     * @return list<PoiCategoryRecord>
+     */
+    private function deriveCategoriesFromPois(array $pois): array
+    {
+        /** @var array<string, PoiCategoryRecord> $map */
+        $map = [];
+        $order = 1;
+        foreach ($pois as $poi) {
+            if ($poi->categorySlug !== '' && !isset($map[$poi->categorySlug])) {
+                $map[$poi->categorySlug] = new PoiCategoryRecord(
+                    id: $poi->categoryId,
+                    slug: $poi->categorySlug,
+                    name: $poi->categoryName !== '' ? $poi->categoryName : $poi->categorySlug,
+                    iconName: 'map-pin',
+                    colorHex: '#FF4D6D',
+                    sortOrder: $order++,
+                );
+            }
+        }
+
+        return array_values($map);
     }
 
     /**
@@ -196,8 +290,10 @@ final class PoiCacheService
             @mkdir($dir, 0750, true);
         }
 
+        $categories = $this->deriveCategoriesFromPois($pois);
         $payload = [
             'generated_at' => ($this->clock)(),
+            'categories' => array_map(static fn (PoiCategoryRecord $c): array => $c->toPublicArray(), $categories),
             'pois' => array_map(static fn (PoiRecord $poi): array => $poi->toPublicArray(), $pois),
         ];
 

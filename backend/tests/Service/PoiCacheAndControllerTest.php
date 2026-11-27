@@ -93,7 +93,7 @@ final class PoiCacheAndControllerTest extends TestCase
             }
         );
 
-        $controller = new PoiController($repo, $cache);
+        $controller = new PoiController($cache);
         $router = new Router();
         $router->get('/api/categories', [$controller, 'listCategories']);
         $router->get('/api/pois', [$controller, 'listPois']);

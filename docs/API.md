@@ -238,7 +238,7 @@ Lists all map POI categories ordered by `sort_order`.
 
 ### 7. Public POIs (Cached) — `GET /api/pois` & `GET /api/pois/{id}`
 
-Returns `PUBLISHED` POIs served via `backend/storage/cache/pois.json` (`POI_CACHE_TTL_SECONDS`, default `300s`).
+Returns `PUBLISHED` POIs served via `backend/storage/cache/pois.json` (`POI_CACHE_TTL_SECONDS`, default `300s`), populated either from MySQL or pre-calibrated via `php backend/bin/import-vicemap.php` (falls back gracefully to `pois.json` when MySQL is offline or empty).
 Optional query params on `GET /api/pois`:
 - `category`: category slug (e.g. `weapons`) or numeric `category_id`.
 - `q`: case-insensitive search across `title`, `description`, `category_name`, and `metadata.region`.

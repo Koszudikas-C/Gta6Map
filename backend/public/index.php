@@ -110,7 +110,7 @@ try {
     $telemetryController = new TelemetryController($appLogger);
     $authController = new AuthController($authService, $userRepository, $securityLogger);
     $profileController = new ProfileController($userRepository);
-    $poiController = new PoiController($poiRepository, $poiCacheService);
+    $poiController = new PoiController($poiCacheService);
     $progressController = new ProgressController($progressRepository);
     $customPinController = new CustomPinController($customPinRepository);
 
