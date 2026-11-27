@@ -84,6 +84,10 @@ export class PlatformContextService {
     }
   });
 
+  readonly resetViewTooltip = computed(() => {
+    return this.mode() === 'desktop' ? 'Centralizar Mapa (C)' : 'Centralizar Mapa';
+  });
+
   backpackTooltip(isOpen: boolean): string {
     const base = isOpen ? 'Guardar Mapa na Mochila' : 'Abrir Mapa da Mochila';
     switch (this.mode()) {

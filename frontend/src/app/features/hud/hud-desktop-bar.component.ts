@@ -23,6 +23,10 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
         <span class="legend-label">2D/3D</span>
       </div>
       <div class="legend-item">
+        <kbd class="legend-key font-mono-tactical">C</kbd>
+        <span class="legend-label">Centralizar</span>
+      </div>
+      <div class="legend-item">
         <kbd class="legend-key font-mono-tactical">F</kbd>
         <span class="legend-label">Tela Cheia</span>
       </div>
