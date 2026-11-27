@@ -1,5 +1,7 @@
 export type DeviceMode = 'desktop' | 'mobile' | 'console';
 
+export type WheelAction = 'map' | 'filters' | '3d' | 'cinema' | 'center' | 'pin' | 'clear-pins';
+
 export interface MapCoordinates {
   lng: number;
   lat: number;
