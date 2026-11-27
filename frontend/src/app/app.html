@@ -14,17 +14,25 @@
   }
 
   @if (!cinemaMode()) {
+    <!-- GTA Weapon Wheel Submenu -->
+    <app-weapon-wheel
+      [isOpen]="wheelOpen()"
+      [is3DMode]="mapService.is3DMode()"
+      (selectItem)="onWheelSelect($event)"
+      (closeWheel)="wheelOpen.set(false)"
+    />
+
     <!-- Persistent Backpack Trigger (Open / Closed Backpack SVG) -->
     <button
       type="button"
       class="hud-panel backpack-trigger"
-      [class.is-open]="sidebarOpen()"
+      [class.is-open]="sidebarOpen() || wheelOpen()"
       (click)="toggleSidebar()"
-      [attr.data-tooltip]="sidebarOpen() ? 'Guardar Mapa na Mochila (M)' : 'Abrir Mapa da Mochila (M)'"
-      [attr.aria-expanded]="sidebarOpen()"
-      [attr.aria-label]="sidebarOpen() ? 'Guardar mapa na mochila' : 'Abrir mapa da mochila'"
+      [attr.data-tooltip]="(sidebarOpen() || wheelOpen()) ? 'Guardar Mapa na Mochila (M)' : 'Abrir Mapa da Mochila (M)'"
+      [attr.aria-expanded]="sidebarOpen() || wheelOpen()"
+      [attr.aria-label]="(sidebarOpen() || wheelOpen()) ? 'Guardar mapa na mochila' : 'Abrir mapa da mochila'"
     >
-      @if (sidebarOpen()) {
+      @if (sidebarOpen() || wheelOpen()) {
         <svg
           class="backpack-svg is-open"
           viewBox="0 0 24 24"

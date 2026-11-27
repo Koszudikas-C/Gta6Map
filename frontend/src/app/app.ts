@@ -30,6 +30,7 @@ import { PlatformContextService } from './core/services/platform-context.service
 import { HudConsoleBarComponent } from './features/hud/hud-console-bar.component';
 import { HudDesktopBarComponent } from './features/hud/hud-desktop-bar.component';
 import { HudMobileDialComponent } from './features/hud/hud-mobile-dial.component';
+import { WeaponWheelComponent, WheelAction } from './features/hud/weapon-wheel.component';
 
 @Component({
   selector: 'app-root',
@@ -38,6 +39,7 @@ import { HudMobileDialComponent } from './features/hud/hud-mobile-dial.component
     HudDesktopBarComponent,
     HudMobileDialComponent,
     HudConsoleBarComponent,
+    WeaponWheelComponent,
   ],
   templateUrl: './app.html',
   styleUrl: './app.scss',
@@ -58,9 +60,9 @@ export class App implements AfterViewInit, OnDestroy {
   readonly isMobile = signal(
     typeof window !== 'undefined' ? window.innerWidth <= 767 : false
   );
-  readonly sidebarOpen = signal(
-    typeof window !== 'undefined' ? window.innerWidth > 767 : true
-  );
+  readonly wheelOpen = signal(false);
+  readonly activePanel = signal<'map' | 'filters' | null>(null);
+  readonly sidebarOpen = signal(false);
   readonly cinemaMode = signal(false);
   readonly isFullscreen = signal(false);
   readonly searchQuery = signal('');
@@ -95,7 +97,31 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   toggleSidebar(): void {
-    this.sidebarOpen.update((v) => !v);
+    if (this.activePanel() !== null) {
+      this.activePanel.set(null);
+      this.sidebarOpen.set(false);
+      return;
+    }
+    this.wheelOpen.update((v) => !v);
+  }
+
+  onWheelSelect(action: WheelAction): void {
+    this.wheelOpen.set(false);
+    switch (action) {
+      case 'map':
+        this.focusSearch();
+        break;
+      case 'filters':
+        this.activePanel.set('filters');
+        this.sidebarOpen.set(true);
+        break;
+      case '3d':
+        this.mapService.toggle3D();
+        break;
+      case 'cinema':
+        this.toggleCinemaMode();
+        break;
+    }
   }
 
   toggleCinemaMode(): void {
@@ -104,6 +130,8 @@ export class App implements AfterViewInit, OnDestroy {
 
   focusSearch(): void {
     this.cinemaMode.set(false);
+    this.wheelOpen.set(false);
+    this.activePanel.set('map');
     this.sidebarOpen.set(true);
     queueMicrotask(() => this.searchInput?.nativeElement.focus());
   }
@@ -168,9 +196,12 @@ export class App implements AfterViewInit, OnDestroy {
     if (event.key === 'Escape') {
       if (this.cinemaMode()) {
         this.cinemaMode.set(false);
+      } else if (this.wheelOpen()) {
+        this.wheelOpen.set(false);
       } else if (isInput) {
         (event.target as HTMLElement).blur();
       } else {
+        this.activePanel.set(null);
         this.sidebarOpen.set(false);
       }
       return;
