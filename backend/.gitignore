@@ -3,4 +3,5 @@
 *.log
 storage/logs/*.log
 storage/cache/*.json
+storage/ratelimit/
 .phpunit.result.cache

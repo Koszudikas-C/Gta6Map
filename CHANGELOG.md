@@ -4,6 +4,23 @@ All notable changes to the **Gta6Map (Leonida)** project will be documented in t
 
 ## [0.1.0] - 2026-11-27
 
+### Added (Security Hardening — Rate Limiting & Security Headers)
+- **RateLimiter (`backend/src/Http/RateLimiter.php`)**: File-backed fixed-window rate limiter (`backend/storage/ratelimit/` with `LOCK_EX` and expired-window cleanup), returning `429 Too Many Requests` + `Retry-After` and logging breaches to the `security` channel. Applied to `POST /api/auth/google` (`15/min`) and `POST /api/telemetry/client-error` (`30/min`).
+- **Security Headers (`JsonResponse`, `backend/public/index.php`, `backend/public/.htaccess`)**: Enforced `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin` across all API responses.
+- **Tests & Docs**: Added `RateLimiterTest` (`backend/tests/Http/RateLimiterTest.php`), updated `backend/.gitignore` and `docs/API.md` (`429 Too Many Requests`).
+
+### Added (Phase 2 — Google OAuth 2.0, JWT, Profile & Referral System)
+- **Auth Layer (`backend/src/Auth/`)**:
+  - `GoogleTokenVerifier` & `GoogleTokenVerifierInterface`: validates Google ID tokens (`aud`, `iss`, `exp`, `email_verified`) with injectable HTTP fetcher for unit tests.
+  - `JwtService`: stateless `HS256` JWT issuance and verification (`sub`, `role`, `is_vip`, `iss`, `iat`, `exp`).
+  - `AuthMiddleware`: `Authorization: Bearer <token>` middleware attaching `AuthenticatedUser` to `Request` and logging rejections to `security` channel.
+- **User Persistence & Referral Engine (`backend/src/Repository/`, `backend/src/Service/`)**:
+  - `UserRepository` (`PDO_MYSQL` native prepared statements) & `UserRecord` (omitting raw CPF).
+  - `ReferralCodeGenerator` (`LEO...` unique codes) and `AuthService` (Google identity sync, `?ref=` attribution, anti-self-referral enforcement).
+- **Endpoints (`AuthController`, `ProfileController`, `backend/public/index.php`)**:
+  - `POST /api/auth/google`, `GET /api/me`, and `PATCH /api/me` (with `psn_id` sanitization).
+- **Tests & Docs**: PHPUnit tests in `backend/tests/` (`JwtServiceTest`, `GoogleTokenVerifierTest`, `AuthMiddlewareTest`, `AuthServiceAndControllerTest`, `ProfileControllerTest`, `UserRepositoryTest`) + `docs/API.md` & `backend/.env.example`.
+
 ### Added (Phase 1 — Backend Foundation, MySQL 8.0+ Schema & Base Observability)
 - **Composer & Dependencies (`backend/composer.json`)**: Added `monolog/monolog` (`^3.0`), configured `phpunit/phpunit` and `phpstan/phpstan`, and updated `backend/.gitignore` for `storage/logs/*.log` and `/vendor/`.
 - **MySQL 8.0+ InnoDB Schema (`database/migrations/001_initial_schema.sql`)**: Created tables `users`, `poi_categories`, `pois`, `user_poi_progress`, `user_custom_pins`, `payments`, `raffle_quotas` (`CHECK (quota_number <= 999)`), `campaign_settings`, and `audit_logs` with `CHAR(36)` UUIDs, `JSON`, `BTREE` indexes, and `utf8mb4_unicode_ci`.

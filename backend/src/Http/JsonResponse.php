@@ -9,6 +9,12 @@ namespace App\Http;
  */
 final class JsonResponse
 {
+    public const SECURITY_HEADERS = [
+        'X-Content-Type-Options' => 'nosniff',
+        'X-Frame-Options' => 'DENY',
+        'Referrer-Policy' => 'strict-origin-when-cross-origin',
+    ];
+
     /**
      * @param array<string, mixed> $data
      * @param array<string, string> $headers
@@ -66,7 +72,8 @@ final class JsonResponse
         http_response_code($this->statusCode);
         header('Content-Type: application/json; charset=utf-8');
 
-        foreach ($this->headers as $name => $value) {
+        $mergedHeaders = array_merge(self::SECURITY_HEADERS, $this->headers);
+        foreach ($mergedHeaders as $name => $value) {
             header(sprintf('%s: %s', $name, $value));
         }
 

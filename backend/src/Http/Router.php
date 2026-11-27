@@ -31,6 +31,14 @@ final class Router
     /**
      * @param callable(Request): JsonResponse $handler
      */
+    public function patch(string $path, callable $handler): void
+    {
+        $this->add('PATCH', $path, $handler);
+    }
+
+    /**
+     * @param callable(Request): JsonResponse $handler
+     */
     public function add(string $method, string $path, callable $handler): void
     {
         $normalizedPath = Request::normalizePath($path);

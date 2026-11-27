@@ -2,16 +2,24 @@
 
 declare(strict_types=1);
 
+use App\Auth\AuthMiddleware;
+use App\Auth\GoogleTokenVerifier;
+use App\Auth\JwtService;
 use App\Config\Env;
 use App\Database\Connection;
+use App\Http\Controller\AuthController;
 use App\Http\Controller\HealthController;
+use App\Http\Controller\ProfileController;
 use App\Http\Controller\TelemetryController;
 use App\Http\JsonResponse;
+use App\Http\RateLimiter;
 use App\Http\Request;
 use App\Http\RequestIdGenerator;
 use App\Http\Router;
 use App\Logging\LgpdSanitizer;
 use App\Logging\LoggerFactory;
+use App\Repository\UserRepository;
+use App\Service\AuthService;
 
 $backendRoot = dirname(__DIR__);
 require_once $backendRoot . '/vendor/autoload.php';
@@ -30,19 +38,21 @@ if (!str_starts_with($logDir, '/') && preg_match('/^[A-Za-z]:[\\\\\/]/', $logDir
 $includeStacktraces = !$env->isProduction() && $env->isDebug();
 $loggerFactory = new LoggerFactory($logDir, $requestId, $includeStacktraces);
 $appLogger = $loggerFactory->channel(LoggerFactory::CHANNEL_APP);
+$securityLogger = $loggerFactory->channel(LoggerFactory::CHANNEL_SECURITY);
+$slowQueryLogger = $loggerFactory->channel(LoggerFactory::CHANNEL_SLOW_QUERY);
 
 $request = Request::fromGlobals($requestId);
 
-$corsHeaders = [
+$defaultResponseHeaders = array_merge(JsonResponse::SECURITY_HEADERS, [
     'X-Request-ID' => $requestId,
     'Access-Control-Allow-Origin' => $env->getString('CORS_ALLOWED_ORIGIN', '*'),
     'Access-Control-Allow-Methods' => 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers' => 'Content-Type, Authorization, X-Request-ID',
-    'Access-Control-Expose-Headers' => 'X-Request-ID',
-];
+    'Access-Control-Expose-Headers' => 'X-Request-ID, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset',
+]);
 
-$applyCors = static function (JsonResponse $response) use ($corsHeaders): JsonResponse {
-    foreach ($corsHeaders as $name => $value) {
+$applyDefaultHeaders = static function (JsonResponse $response) use ($defaultResponseHeaders): JsonResponse {
+    foreach ($defaultResponseHeaders as $name => $value) {
         $response = $response->withHeader($name, $value);
     }
 
@@ -50,28 +60,63 @@ $applyCors = static function (JsonResponse $response) use ($corsHeaders): JsonRe
 };
 
 if ($request->getMethod() === 'OPTIONS') {
-    $applyCors(new JsonResponse(204, []))->emit();
+    $applyDefaultHeaders(new JsonResponse(204, []))->emit();
     exit(0);
 }
 
 try {
     $storagePath = $backendRoot . '/storage';
     $poiCacheFile = $storagePath . '/cache/pois.json';
+    $rateLimitDir = $storagePath . '/ratelimit';
+    $pdoFactory = static fn (): PDO => Connection::create($env);
+
+    $userRepository = new UserRepository($pdoFactory, $slowQueryLogger);
+    $jwtService = new JwtService(
+        secret: $env->getString('JWT_SECRET', ''),
+        ttlSeconds: $env->getInt('JWT_TTL_SECONDS', 604800),
+    );
+    $googleVerifier = new GoogleTokenVerifier($env->getString('GOOGLE_CLIENT_ID', ''));
+    $authService = new AuthService($googleVerifier, $jwtService, $userRepository);
+    $authMiddleware = new AuthMiddleware($jwtService, $securityLogger);
+    $rateLimiter = new RateLimiter($rateLimitDir, $securityLogger);
 
     $healthController = new HealthController(
-        static fn (): PDO => Connection::create($env),
+        $pdoFactory,
         $storagePath,
         $poiCacheFile,
         $env->getString('APP_ENV', 'production')
     );
     $telemetryController = new TelemetryController($appLogger);
+    $authController = new AuthController($authService, $userRepository, $securityLogger);
+    $profileController = new ProfileController($userRepository);
 
     $router = new Router();
     $router->get('/api/health', [$healthController, 'handle']);
-    $router->post('/api/telemetry/client-error', [$telemetryController, 'handle']);
+    $router->post('/api/telemetry/client-error', static fn (Request $req): JsonResponse => $rateLimiter->limit(
+        $req,
+        'telemetry_client_error',
+        30,
+        60,
+        [$telemetryController, 'handle']
+    ));
+    $router->post('/api/auth/google', static fn (Request $req): JsonResponse => $rateLimiter->limit(
+        $req,
+        'auth_google',
+        15,
+        60,
+        [$authController, 'googleLogin']
+    ));
+    $router->get('/api/me', static fn (Request $req): JsonResponse => $authMiddleware->authenticate(
+        $req,
+        [$profileController, 'getMe']
+    ));
+    $router->patch('/api/me', static fn (Request $req): JsonResponse => $authMiddleware->authenticate(
+        $req,
+        [$profileController, 'updateMe']
+    ));
 
     $response = $router->dispatch($request);
-    $applyCors($response)->emit();
+    $applyDefaultHeaders($response)->emit();
 } catch (Throwable $exception) {
     $appLogger->error('Unhandled API exception', [
         'exception_class' => $exception::class,
@@ -92,5 +137,5 @@ try {
         $payload['trace'] = explode("\n", LgpdSanitizer::sanitizeString($exception->getTraceAsString()));
     }
 
-    $applyCors(new JsonResponse(500, $payload))->emit();
+    $applyDefaultHeaders(new JsonResponse(500, $payload))->emit();
 }

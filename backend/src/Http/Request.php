@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http;
 
+use App\Auth\AuthenticatedUser;
 use JsonException;
 
 /**
@@ -23,6 +24,7 @@ final class Request
         private readonly string $rawBody = '',
         private readonly string $requestId = '',
         private readonly string $clientIp = '127.0.0.1',
+        private readonly ?AuthenticatedUser $authenticatedUser = null,
     ) {
     }
 
@@ -100,6 +102,25 @@ final class Request
         return $this->clientIp;
     }
 
+    public function getAuthenticatedUser(): ?AuthenticatedUser
+    {
+        return $this->authenticatedUser;
+    }
+
+    public function withAuthenticatedUser(AuthenticatedUser $user): self
+    {
+        return new self(
+            method: $this->method,
+            path: $this->path,
+            headers: $this->headers,
+            query: $this->query,
+            rawBody: $this->rawBody,
+            requestId: $this->requestId,
+            clientIp: $this->clientIp,
+            authenticatedUser: $user,
+        );
+    }
+
     /**
      * Decode JSON request body or return null if empty/invalid.
      *
@@ -141,6 +162,8 @@ final class Request
             if (str_starts_with($key, 'HTTP_')) {
                 $headerName = str_replace('_', '-', strtolower(substr($key, 5)));
                 $headers[$headerName] = $value;
+            } elseif ($key === 'REDIRECT_HTTP_AUTHORIZATION' && !isset($headers['authorization'])) {
+                $headers['authorization'] = $value;
             } elseif (in_array($key, ['CONTENT_TYPE', 'CONTENT_LENGTH'], true)) {
                 $headerName = str_replace('_', '-', strtolower($key));
                 $headers[$headerName] = $value;
