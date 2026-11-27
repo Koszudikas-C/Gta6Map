@@ -1,4 +1,6 @@
 /vendor/
 .env
 *.log
+storage/logs/*.log
+storage/cache/*.json
 .phpunit.result.cache
