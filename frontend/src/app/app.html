@@ -37,8 +37,19 @@
     <app-weapon-wheel
       [isOpen]="wheelOpen()"
       [is3DMode]="mapService.is3DMode()"
+      [isPinMode]="mapService.isPinMode()"
+      [customPinsCount]="mapService.customPins().length"
       (selectItem)="onWheelSelect($event)"
       (closeWheel)="wheelOpen.set(false)"
+    />
+
+    <app-quick-search
+      [isOpen]="quickSearchOpen()"
+      [query]="searchQuery()"
+      [placeholder]="platform.searchPlaceholder()"
+      (queryChange)="onQuickSearchQuery($event)"
+      (selectPoi)="selectQuickSearchResult($event)"
+      (closeSearch)="quickSearchOpen.set(false)"
     />
 
     <!-- Persistent Backpack Trigger (Open / Closed Backpack SVG) -->
@@ -213,6 +224,25 @@
         aria-label="Alternar visão 2D e 3D"
       >
         <lucide-icon [img]="icons.Compass" [size]="18" [strokeWidth]="1.75" />
+      </button>
+      <button
+        type="button"
+        class="icon-btn"
+        [class.is-active]="mapService.isPinMode()"
+        (click)="mapService.togglePinMode()"
+        data-tooltip="Marcar ponto no mapa (P)"
+        aria-label="Marcar ponto no mapa"
+      >
+        <lucide-icon [img]="icons.MapPin" [size]="18" [strokeWidth]="1.75" />
+      </button>
+      <button
+        type="button"
+        class="icon-btn"
+        (click)="mapService.resetView()"
+        [attr.data-tooltip]="platform.resetViewTooltip()"
+        aria-label="Centralizar mapa"
+      >
+        <lucide-icon [img]="icons.LocateFixed" [size]="18" [strokeWidth]="1.75" />
       </button>
     </div>
 

@@ -18,19 +18,22 @@ import {
   EyeOff,
   Gamepad2,
   Layers,
+  LocateFixed,
+  MapPin,
   Maximize2,
   Minus,
   Plus,
   Search,
   LucideAngularModule,
 } from 'lucide-angular';
-import { POI_CATEGORIES } from './core/data/leonida-map.data';
+import { LeonidaPoi, POI_CATEGORIES } from './core/data/leonida-map.data';
 import { GamepadService } from './core/services/gamepad.service';
 import { MapService } from './core/services/map.service';
 import { PlatformContextService } from './core/services/platform-context.service';
 import { HudConsoleBarComponent } from './features/hud/hud-console-bar.component';
 import { HudDesktopBarComponent } from './features/hud/hud-desktop-bar.component';
 import { HudMobileDialComponent } from './features/hud/hud-mobile-dial.component';
+import { QuickSearchComponent } from './features/hud/quick-search.component';
 import { WeaponWheelComponent, WheelAction } from './features/hud/weapon-wheel.component';
 
 @Component({
@@ -40,6 +43,7 @@ import { WeaponWheelComponent, WheelAction } from './features/hud/weapon-wheel.c
     HudDesktopBarComponent,
     HudMobileDialComponent,
     HudConsoleBarComponent,
+    QuickSearchComponent,
     WeaponWheelComponent,
   ],
   templateUrl: './app.html',
@@ -58,12 +62,16 @@ export class App implements AfterViewInit, OnDestroy {
   @ViewChild('searchInput')
   private readonly searchInput?: ElementRef<HTMLInputElement>;
 
+  @ViewChild(QuickSearchComponent)
+  private readonly quickSearch?: QuickSearchComponent;
+
   readonly isMobile = signal(
     typeof window !== 'undefined' ? window.innerWidth <= 767 : false
   );
   readonly wheelOpen = signal(false);
   readonly activePanel = signal<'map' | 'filters' | null>(null);
   readonly sidebarOpen = signal(false);
+  readonly quickSearchOpen = signal(false);
   readonly cinemaMode = signal(false);
   readonly isFullscreen = signal(false);
   readonly searchQuery = signal('');
@@ -79,6 +87,8 @@ export class App implements AfterViewInit, OnDestroy {
     EyeOff,
     Gamepad2,
     Layers,
+    LocateFixed,
+    MapPin,
     Maximize2,
     Minus,
     Plus,
@@ -113,9 +123,14 @@ export class App implements AfterViewInit, OnDestroy {
     this.wheelOpen.set(false);
     switch (action) {
       case 'map':
-        this.focusSearch();
+        this.quickSearchOpen.set(false);
+        this.cinemaMode.set(false);
+        this.activePanel.set('map');
+        this.sidebarOpen.set(true);
+        setTimeout(() => this.searchInput?.nativeElement.focus(), 0);
         break;
       case 'filters':
+        this.quickSearchOpen.set(false);
         this.activePanel.set('filters');
         this.sidebarOpen.set(true);
         break;
@@ -124,6 +139,15 @@ export class App implements AfterViewInit, OnDestroy {
         break;
       case 'cinema':
         this.toggleCinemaMode();
+        break;
+      case 'center':
+        this.mapService.resetView();
+        break;
+      case 'pin':
+        this.mapService.togglePinMode();
+        break;
+      case 'clear-pins':
+        this.mapService.clearCustomPins();
         break;
     }
   }
@@ -135,9 +159,13 @@ export class App implements AfterViewInit, OnDestroy {
   focusSearch(): void {
     this.cinemaMode.set(false);
     this.wheelOpen.set(false);
-    this.activePanel.set('map');
-    this.sidebarOpen.set(true);
-    queueMicrotask(() => this.searchInput?.nativeElement.focus());
+    if (this.sidebarOpen()) {
+      this.quickSearchOpen.set(false);
+      queueMicrotask(() => this.searchInput?.nativeElement.focus());
+      return;
+    }
+    this.quickSearchOpen.set(true);
+    setTimeout(() => this.quickSearch?.focusInput(), 0);
   }
 
   toggleFullscreen(): void {
@@ -155,6 +183,16 @@ export class App implements AfterViewInit, OnDestroy {
     const target = event.target as HTMLInputElement;
     this.searchQuery.set(target.value);
     this.mapService.filterPois(target.value, this.selectedCategory());
+  }
+
+  onQuickSearchQuery(value: string): void {
+    this.searchQuery.set(value);
+    this.mapService.filterPois(value, this.selectedCategory());
+  }
+
+  selectQuickSearchResult(poi: LeonidaPoi): void {
+    this.mapService.flyToPoi(poi);
+    this.quickSearchOpen.set(false);
   }
 
   selectCategory(category: string): void {
@@ -207,6 +245,12 @@ export class App implements AfterViewInit, OnDestroy {
   @HostListener('window:pointerdown', ['$event'])
   onPointerDown(event: PointerEvent): void {
     this.spawnBurst(event.clientX, event.clientY);
+    if (
+      this.quickSearchOpen() &&
+      !(event.target as HTMLElement | null)?.closest('.quick-search-bar')
+    ) {
+      this.quickSearchOpen.set(false);
+    }
   }
 
   @HostListener('window:keydown', ['$event'])
@@ -225,6 +269,8 @@ export class App implements AfterViewInit, OnDestroy {
         this.cinemaMode.set(false);
       } else if (this.wheelOpen()) {
         this.wheelOpen.set(false);
+      } else if (this.quickSearchOpen()) {
+        this.quickSearchOpen.set(false);
       } else if (isInput) {
         (event.target as HTMLElement).blur();
       } else {
@@ -249,6 +295,10 @@ export class App implements AfterViewInit, OnDestroy {
       this.toggleFullscreen();
     } else if (event.key === '3') {
       this.mapService.toggle3D();
+    } else if (event.key.toLowerCase() === 'c') {
+      this.mapService.resetView();
+    } else if (event.key.toLowerCase() === 'p') {
+      this.mapService.togglePinMode();
     } else if (event.key === '+' || event.key === '=') {
       this.mapService.zoomBy(1);
     } else if (event.key === '-' || event.key === '_') {
