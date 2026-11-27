@@ -6,11 +6,14 @@
   <!-- Full-screen MapLibre GL JS Canvas -->
   <div #mapContainer class="map-canvas" aria-label="Mapa Tático de Leonida"></div>
 
-  <!-- Center Tactical Reticle (visible when Gamepad is active) -->
-  @if (gamepadService.connected() && !cinemaMode()) {
-    <div class="tactical-reticle" aria-hidden="true">
-      <lucide-icon [img]="icons.Crosshair" [size]="24" [strokeWidth]="1.75" />
-    </div>
+  <!-- Click / Shot Impact Bursts -->
+  @for (burst of clickBursts(); track burst.id) {
+    <div
+      class="click-burst"
+      [style.left.px]="burst.x"
+      [style.top.px]="burst.y"
+      aria-hidden="true"
+    ></div>
   }
 
   @if (!cinemaMode()) {
@@ -145,7 +148,7 @@
         type="button"
         class="icon-btn"
         (click)="mapService.zoomBy(1)"
-        data-tooltip="Aumentar Zoom (+)"
+        [attr.data-tooltip]="platform.zoomInTooltip()"
         aria-label="Aumentar zoom"
       >
         <lucide-icon [img]="icons.Plus" [size]="18" [strokeWidth]="1.75" />
@@ -154,7 +157,7 @@
         type="button"
         class="icon-btn"
         (click)="mapService.zoomBy(-1)"
-        data-tooltip="Diminuir Zoom (-)"
+        [attr.data-tooltip]="platform.zoomOutTooltip()"
         aria-label="Diminuir zoom"
       >
         <lucide-icon [img]="icons.Minus" [size]="18" [strokeWidth]="1.75" />
@@ -164,7 +167,7 @@
         class="icon-btn"
         [class.is-active]="mapService.is3DMode()"
         (click)="mapService.toggle3D()"
-        data-tooltip="Alternar Visão 2D / 3D (3)"
+        [attr.data-tooltip]="platform.toggle3DTooltip()"
         aria-label="Alternar visão 2D e 3D"
       >
         <lucide-icon [img]="icons.Compass" [size]="18" [strokeWidth]="1.75" />

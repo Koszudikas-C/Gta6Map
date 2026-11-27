@@ -55,10 +55,10 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
 
       .legend-key {
         padding: 2px 6px;
-        background-color: rgba(76, 224, 210, 0.14);
-        border: 1px solid var(--palm-teal);
+        background-color: rgba(255, 166, 107, 0.14);
+        border: 1px solid var(--sunset-peach);
         border-radius: var(--radius-xs);
-        color: var(--palm-teal);
+        color: var(--sunset-peach);
         font-size: 11px;
         font-weight: 700;
       }

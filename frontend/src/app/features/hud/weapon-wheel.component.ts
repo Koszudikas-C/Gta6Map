@@ -137,9 +137,34 @@ export type WheelAction = 'map' | 'filters' | '3d' | 'cinema';
         z-index: 45;
         border-radius: 50%;
         background: radial-gradient(circle, rgba(28, 18, 48, 0.94) 36%, rgba(18, 11, 30, 0.88) 100%);
-        border: 2px solid var(--twilight-purple);
-        box-shadow: 0 0 36px rgba(110, 60, 188, 0.45);
-        animation: wheelPop 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        border: 2px solid #7B208F;
+        box-shadow: 0 0 36px rgba(123, 32, 143, 0.45);
+        animation:
+          wheelPop 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards,
+          gtaWheelGlow 8s ease-in-out infinite;
+      }
+
+      @keyframes gtaWheelGlow {
+        0%, 100% {
+          border-color: #7B208F;
+          box-shadow: 0 0 36px rgba(123, 32, 143, 0.45);
+        }
+        25% {
+          border-color: #C9349B;
+          box-shadow: 0 0 40px rgba(201, 52, 155, 0.48);
+        }
+        50% {
+          border-color: #F36A78;
+          box-shadow: 0 0 42px rgba(243, 106, 120, 0.48);
+        }
+        75% {
+          border-color: #FF9B55;
+          box-shadow: 0 0 40px rgba(255, 155, 85, 0.45);
+        }
+        90% {
+          border-color: #FFB458;
+          box-shadow: 0 0 38px rgba(255, 180, 88, 0.42);
+        }
       }
 
       @keyframes wheelPop {

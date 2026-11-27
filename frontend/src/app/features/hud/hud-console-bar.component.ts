@@ -12,7 +12,15 @@ import { GamepadService } from '../../core/services/gamepad.service';
       <lucide-icon [img]="gamepadIcon" [size]="16" [strokeWidth]="1.75" class="gamepad-icon" />
       @for (item of gamepadService.legends(); track item.button) {
         <div class="legend-item">
-          <kbd class="legend-key font-mono-tactical">{{ item.button }}</kbd>
+          <kbd class="legend-key font-mono-tactical">
+            @if (item.button === '△') {
+              <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="6,1.5 10.8,10 1.2,10" />
+              </svg>
+            } @else {
+              {{ item.button }}
+            }
+          </kbd>
           <span class="legend-label">{{ item.label }}</span>
         </div>
       }
@@ -33,7 +41,7 @@ import { GamepadService } from '../../core/services/gamepad.service';
       }
 
       .gamepad-icon {
-        color: var(--palm-teal);
+        color: var(--vice-magenta);
       }
 
       .legend-item {
@@ -44,11 +52,16 @@ import { GamepadService } from '../../core/services/gamepad.service';
       }
 
       .legend-key {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 20px;
+        line-height: 1;
         padding: 2px 6px;
-        background-color: rgba(76, 224, 210, 0.14);
-        border: 1px solid var(--palm-teal);
+        background-color: rgba(255, 166, 107, 0.14);
+        border: 1px solid var(--sunset-peach);
         border-radius: var(--radius-xs);
-        color: var(--palm-teal);
+        color: var(--sunset-peach);
         font-size: 11px;
         font-weight: 700;
       }

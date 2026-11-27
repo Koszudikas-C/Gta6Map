@@ -66,6 +66,8 @@ export class App implements AfterViewInit, OnDestroy {
   readonly cinemaMode = signal(false);
   readonly isFullscreen = signal(false);
   readonly searchQuery = signal('');
+  readonly clickBursts = signal<{ id: number; x: number; y: number }[]>([]);
+  private burstId = 0;
   readonly quickCategories = ['Missões', 'Armas', 'Colecionáveis', 'Lojas', 'Eventos'] as const;
   readonly selectedCategory = signal<string>('Missões');
 
@@ -180,6 +182,15 @@ export class App implements AfterViewInit, OnDestroy {
     if (isPlatformBrowser(this.platformId)) {
       this.isMobile.set(window.innerWidth <= 767);
     }
+  }
+
+  @HostListener('window:pointerdown', ['$event'])
+  onPointerDown(event: PointerEvent): void {
+    const id = ++this.burstId;
+    this.clickBursts.update((list) => [...list, { id, x: event.clientX, y: event.clientY }]);
+    setTimeout(() => {
+      this.clickBursts.update((list) => list.filter((b) => b.id !== id));
+    }, 320);
   }
 
   @HostListener('window:keydown', ['$event'])

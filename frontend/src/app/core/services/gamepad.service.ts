@@ -1,9 +1,11 @@
-import { Injectable, NgZone, PLATFORM_ID, inject, signal } from '@angular/core';
+import { Injectable, NgZone, PLATFORM_ID, computed, inject, signal } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { GamepadLegendItem } from '../models/hud.models';
 import { MapService } from './map.service';
 
 const DEADZONE = 0.15;
+
+export type ControllerType = 'playstation' | 'xbox' | 'generic';
 
 export interface GamepadActions {
   onFocusSearch?: () => void;
@@ -26,35 +28,70 @@ export class GamepadService {
 
   readonly connected = signal(false);
   readonly controllerName = signal<string | null>(null);
-  readonly legends = signal<GamepadLegendItem[]>([
-    { button: 'L1/LB', label: 'Mochila' },
-    { button: 'R1/RB', label: 'Buscar' },
-    { button: 'L2/R2', label: 'Zoom' },
-    { button: 'R3', label: 'Visão 3D' },
-    { button: 'Y/Select', label: 'Cinema' },
-  ]);
+  readonly controllerType = signal<ControllerType>('generic');
+  readonly legends = computed<GamepadLegendItem[]>(() => {
+    switch (this.controllerType()) {
+      case 'playstation':
+        return [
+          { button: 'L1', label: 'Mochila' },
+          { button: 'R1', label: 'Buscar' },
+          { button: 'L2/R2', label: 'Zoom' },
+          { button: 'R3', label: 'Visão 3D' },
+          { button: '△', label: 'Cinema' },
+        ];
+      case 'xbox':
+        return [
+          { button: 'LB', label: 'Mochila' },
+          { button: 'RB', label: 'Buscar' },
+          { button: 'LT/RT', label: 'Zoom' },
+          { button: 'RS', label: 'Visão 3D' },
+          { button: 'Y', label: 'Cinema' },
+        ];
+      default:
+        return [
+          { button: 'L1/LB', label: 'Mochila' },
+          { button: 'R1/RB', label: 'Buscar' },
+          { button: 'L2/R2', label: 'Zoom' },
+          { button: 'R3', label: 'Visão 3D' },
+          { button: 'Y/△', label: 'Cinema' },
+        ];
+    }
+  });
 
   private readonly onConnected = (e: GamepadEvent): void => {
     this.ngZone.run(() => {
       this.connected.set(true);
       this.controllerName.set(e.gamepad.id);
+      this.controllerType.set(this.detectControllerType(e.gamepad.id));
     });
     this.startPolling();
   };
 
   private readonly onDisconnected = (): void => {
     const pads = isPlatformBrowser(this.platformId) ? navigator.getGamepads?.() ?? [] : [];
-    const stillConnected = Array.from(pads).some((p) => p !== null);
+    const active = Array.from(pads).find((p) => p !== null);
     this.ngZone.run(() => {
-      this.connected.set(stillConnected);
-      if (!stillConnected) {
+      this.connected.set(Boolean(active));
+      if (!active) {
         this.controllerName.set(null);
+        this.controllerType.set('generic');
       }
     });
-    if (!stillConnected) {
+    if (!active) {
       this.stopPolling();
     }
   };
+
+  private detectControllerType(id: string): ControllerType {
+    const lower = id.toLowerCase();
+    if (/dualsense|dualshock|sony|054c/.test(lower)) {
+      return 'playstation';
+    }
+    if (/xbox|xinput|045e/.test(lower)) {
+      return 'xbox';
+    }
+    return 'generic';
+  }
 
   init(actions: GamepadActions = {}): void {
     this.actions = actions;

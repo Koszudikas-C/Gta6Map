@@ -99,3 +99,12 @@ body {
   outline-offset: 2px;
   box-shadow: 0 0 12px rgba(76, 224, 210, 0.45);
 }
+
+html,
+body,
+button,
+a,
+[role='button'],
+.hud-shell * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23F44E8F' stroke-width='1.75' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 2v4M12 18v4M2 12h4M18 12h4'/%3E%3Ccircle cx='12' cy='12' r='1.5' fill='%23FFA66B' stroke='none'/%3E%3C/svg%3E") 12 12, crosshair !important;
+}
