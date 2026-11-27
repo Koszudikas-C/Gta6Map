@@ -15,6 +15,7 @@ final class Request
     /**
      * @param array<string, string> $headers
      * @param array<string, string> $query
+     * @param array<string, string> $routeParams
      */
     public function __construct(
         private readonly string $method,
@@ -25,6 +26,7 @@ final class Request
         private readonly string $requestId = '',
         private readonly string $clientIp = '127.0.0.1',
         private readonly ?AuthenticatedUser $authenticatedUser = null,
+        private readonly array $routeParams = [],
     ) {
     }
 
@@ -118,6 +120,30 @@ final class Request
             requestId: $this->requestId,
             clientIp: $this->clientIp,
             authenticatedUser: $user,
+            routeParams: $this->routeParams,
+        );
+    }
+
+    public function getRouteParam(string $name, string $default = ''): string
+    {
+        return $this->routeParams[$name] ?? $default;
+    }
+
+    /**
+     * @param array<string, string> $routeParams
+     */
+    public function withRouteParams(array $routeParams): self
+    {
+        return new self(
+            method: $this->method,
+            path: $this->path,
+            headers: $this->headers,
+            query: $this->query,
+            rawBody: $this->rawBody,
+            requestId: $this->requestId,
+            clientIp: $this->clientIp,
+            authenticatedUser: $this->authenticatedUser,
+            routeParams: $routeParams,
         );
     }
 

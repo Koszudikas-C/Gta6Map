@@ -211,6 +211,107 @@ Protected by `Authorization: Bearer <token>`. Updates and sanitizes `psn_id` (`2
 
 ---
 
+## Endpoints (Phase 3 — Public POIs, VIP Progress, Custom Pins & OpenGraph)
+
+### 6. POI Categories — `GET /api/categories`
+
+Lists all map POI categories ordered by `sort_order`.
+
+**Response `200 OK`:**
+```json
+{
+  "categories": [
+    {
+      "id": 1,
+      "slug": "weapons",
+      "name": "Armas",
+      "icon_name": "crosshair",
+      "color_hex": "#FF4D6D",
+      "sort_order": 1
+    }
+  ],
+  "request_id": "..."
+}
+```
+
+---
+
+### 7. Public POIs (Cached) — `GET /api/pois` & `GET /api/pois/{id}`
+
+Returns `PUBLISHED` POIs served via `backend/storage/cache/pois.json` (`POI_CACHE_TTL_SECONDS`, default `300s`).
+Optional query params on `GET /api/pois`:
+- `category`: category slug (e.g. `weapons`) or numeric `category_id`.
+- `q`: case-insensitive search across `title`, `description`, `category_name`, and `metadata.region`.
+
+**Response `200 OK` (`GET /api/pois`):**
+```json
+{
+  "pois": [
+    {
+      "id": 10,
+      "category_id": 1,
+      "category_slug": "weapons",
+      "category_name": "Armas",
+      "title": "Vice Beach Rifle Crate",
+      "description": "Hidden military crate",
+      "coord_x": -80.13,
+      "coord_y": 25.78,
+      "image_url": null,
+      "panorama_url": null,
+      "metadata": { "region": "Ocean Beach" },
+      "status": "PUBLISHED",
+      "created_at": "2026-11-27 00:00:00.000000",
+      "updated_at": "2026-11-27 00:00:00.000000"
+    }
+  ],
+  "total": 1,
+  "request_id": "..."
+}
+```
+
+---
+
+### 8. VIP Cloud Checklist Progress — `GET /api/progress` & `PUT /api/progress`
+
+Protected by `AuthMiddleware::requireVip` (`Authorization: Bearer <token>` + `is_vip = true`). Non-VIP users receive `403 Forbidden` (`code: "VIP_REQUIRED"`) so free progress stays in browser `LocalStorage`.
+
+- `GET /api/progress?save_slot=default`: returns `{ "save_slot": "default", "poi_ids": [10, 22], "count": 2, "request_id": "..." }`.
+- `PUT /api/progress`:
+```json
+{
+  "save_slot": "default",
+  "poi_ids": [10, 22],
+  "mode": "replace"
+}
+```
+(`mode`: `replace` or `merge`, default `replace`).
+
+---
+
+### 9. VIP Custom Pins — `GET /api/custom-pins`, `POST /api/custom-pins`, `DELETE /api/custom-pins/{id}`
+
+Protected by `AuthMiddleware::requireVip` (`403 Forbidden` for non-VIP). Deletion enforces `user_id` ownership (`403 Forbidden` if owned by another user).
+
+- `POST /api/custom-pins` request body:
+```json
+{
+  "title": "Secret Boat",
+  "notes": "Check at night",
+  "coord_x": -80.15,
+  "coord_y": 25.77,
+  "color_hex": "#00D2D3"
+}
+```
+Returns `201 Created` with `{ "pin": { ... }, "request_id": "..." }`.
+
+---
+
+### 10. Dynamic OpenGraph Deep Linking — `GET /share` / `GET /share/{id}` / `GET /?poi={id}` (Social Bots)
+
+Detects social crawler `User-Agent`s (`WhatsApp`, `Discordbot`, `Googlebot`, `Twitterbot`, `facebookexternalhit`, `TelegramBot`, `Slackbot`, `LinkedInBot`, `Bingbot`, `Applebot`) and renders XSS-escaped HTML `<meta property="og:title">`, `og:description`, `og:image`, and `og:url` tags for the requested published POI.
+
+---
+
 ## Error Format & Production Safety
 
 When `APP_ENV=production`, unhandled `500 Internal Server Error` responses suppress stack traces and internal exception messages, returning only:

@@ -30,7 +30,7 @@ final class RateLimiter
     /**
      * Enforce a per-IP rate limit for a named bucket before invoking $next.
      *
-     * @param callable(Request): JsonResponse $next
+     * @param callable(Request): ResponseInterface $next
      */
     public function limit(
         Request $request,
@@ -38,7 +38,7 @@ final class RateLimiter
         int $maxRequests,
         int $windowSeconds,
         callable $next,
-    ): JsonResponse {
+    ): ResponseInterface {
         $this->ensureDirectory();
         $now = ($this->clock)();
         $filePath = $this->bucketFilePath($bucket, $request->getClientIp());

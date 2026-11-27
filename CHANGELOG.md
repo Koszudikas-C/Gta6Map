@@ -4,6 +4,13 @@ All notable changes to the **Gta6Map (Leonida)** project will be documented in t
 
 ## [0.1.0] - 2026-11-27
 
+### Added (Phase 3 — Public POIs Cache, VIP Cloud Progress, Custom Pins & OpenGraph)
+- **HTTP Infrastructure (`ResponseInterface`, `HtmlResponse`, `Router`, `Request`, `AuthMiddleware`)**: Added parameterized `{id}` routing, `put`/`delete` methods, `HtmlResponse`, and `AuthMiddleware::requireVip()` (`403 VIP_REQUIRED` for non-VIP accounts).
+- **Public POIs & JSON Cache (`PoiRepository`, `PoiCacheService`, `PoiController`)**: Added `GET /api/categories`, `GET /api/pois` (with `category` and `q` filtering backed by `backend/storage/cache/pois.json` + `invalidate()`), and `GET /api/pois/{id}`.
+- **VIP Cloud Progress & Custom Pins (`ProgressRepository`, `ProgressController`, `CustomPinRepository`, `CustomPinController`)**: Added `GET /api/progress`, `PUT /api/progress` (transactional slot sync), `GET /api/custom-pins`, `POST /api/custom-pins`, and `DELETE /api/custom-pins/{id}` with ownership verification.
+- **Deep Linking & OpenGraph (`OpenGraphService`, `ShareController`)**: Added `GET /share`, `GET /share/{id}`, and social-bot detection on `/?poi={id}` with strict HTML/URL XSS escaping.
+- **Tests & Docs**: Added PHPUnit tests (`PoiCacheAndControllerTest`, `VipProgressAndCustomPinsTest`, `OpenGraphAndShareTest`, `PoiAndPinRepositoryTest`), updated `backend/.env.example` and `docs/API.md`.
+
 ### Added (Security Hardening — Rate Limiting & Security Headers)
 - **RateLimiter (`backend/src/Http/RateLimiter.php`)**: File-backed fixed-window rate limiter (`backend/storage/ratelimit/` with `LOCK_EX` and expired-window cleanup), returning `429 Too Many Requests` + `Retry-After` and logging breaches to the `security` channel. Applied to `POST /api/auth/google` (`15/min`) and `POST /api/telemetry/client-error` (`30/min`).
 - **Security Headers (`JsonResponse`, `backend/public/index.php`, `backend/public/.htaccess`)**: Enforced `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin` across all API responses.

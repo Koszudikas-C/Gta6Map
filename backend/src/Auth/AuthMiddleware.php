@@ -6,6 +6,7 @@ namespace App\Auth;
 
 use App\Http\JsonResponse;
 use App\Http\Request;
+use App\Http\ResponseInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -20,9 +21,9 @@ final class AuthMiddleware
     }
 
     /**
-     * @param callable(Request): JsonResponse $next
+     * @param callable(Request): ResponseInterface $next
      */
-    public function authenticate(Request $request, callable $next): JsonResponse
+    public function authenticate(Request $request, callable $next): ResponseInterface
     {
         $token = $this->extractBearerToken($request->getHeader('Authorization'));
         if ($token === null) {
@@ -43,6 +44,26 @@ final class AuthMiddleware
         }
 
         return $next($request->withAuthenticatedUser($user));
+    }
+
+    /**
+     * @param callable(Request): ResponseInterface $next
+     */
+    public function requireVip(Request $request, callable $next): ResponseInterface
+    {
+        return $this->authenticate($request, static function (Request $authedRequest) use ($next): ResponseInterface {
+            $user = $authedRequest->getAuthenticatedUser();
+            if ($user === null || !$user->isVip) {
+                return new JsonResponse(403, [
+                    'error' => 'Forbidden',
+                    'code' => 'VIP_REQUIRED',
+                    'message' => 'Plano Fundador (VIP) required for cloud sync and custom pins. Free users keep progress in LocalStorage.',
+                    'request_id' => $authedRequest->getRequestId(),
+                ]);
+            }
+
+            return $next($authedRequest);
+        });
     }
 
     private function extractBearerToken(string $authorizationHeader): ?string

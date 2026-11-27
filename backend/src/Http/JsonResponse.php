@@ -7,13 +7,9 @@ namespace App\Http;
 /**
  * Immutable JSON HTTP response value object.
  */
-final class JsonResponse
+final class JsonResponse implements ResponseInterface
 {
-    public const SECURITY_HEADERS = [
-        'X-Content-Type-Options' => 'nosniff',
-        'X-Frame-Options' => 'DENY',
-        'Referrer-Policy' => 'strict-origin-when-cross-origin',
-    ];
+    public const SECURITY_HEADERS = ResponseInterface::SECURITY_HEADERS;
 
     /**
      * @param array<string, mixed> $data

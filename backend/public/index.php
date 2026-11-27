@@ -8,18 +8,28 @@ use App\Auth\JwtService;
 use App\Config\Env;
 use App\Database\Connection;
 use App\Http\Controller\AuthController;
+use App\Http\Controller\CustomPinController;
 use App\Http\Controller\HealthController;
+use App\Http\Controller\PoiController;
 use App\Http\Controller\ProfileController;
+use App\Http\Controller\ProgressController;
+use App\Http\Controller\ShareController;
 use App\Http\Controller\TelemetryController;
 use App\Http\JsonResponse;
 use App\Http\RateLimiter;
 use App\Http\Request;
 use App\Http\RequestIdGenerator;
+use App\Http\ResponseInterface;
 use App\Http\Router;
 use App\Logging\LgpdSanitizer;
 use App\Logging\LoggerFactory;
+use App\Repository\CustomPinRepository;
+use App\Repository\PoiRepository;
+use App\Repository\ProgressRepository;
 use App\Repository\UserRepository;
 use App\Service\AuthService;
+use App\Service\OpenGraphService;
+use App\Service\PoiCacheService;
 
 $backendRoot = dirname(__DIR__);
 require_once $backendRoot . '/vendor/autoload.php';
@@ -43,7 +53,7 @@ $slowQueryLogger = $loggerFactory->channel(LoggerFactory::CHANNEL_SLOW_QUERY);
 
 $request = Request::fromGlobals($requestId);
 
-$defaultResponseHeaders = array_merge(JsonResponse::SECURITY_HEADERS, [
+$defaultResponseHeaders = array_merge(ResponseInterface::SECURITY_HEADERS, [
     'X-Request-ID' => $requestId,
     'Access-Control-Allow-Origin' => $env->getString('CORS_ALLOWED_ORIGIN', '*'),
     'Access-Control-Allow-Methods' => 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
@@ -51,7 +61,7 @@ $defaultResponseHeaders = array_merge(JsonResponse::SECURITY_HEADERS, [
     'Access-Control-Expose-Headers' => 'X-Request-ID, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset',
 ]);
 
-$applyDefaultHeaders = static function (JsonResponse $response) use ($defaultResponseHeaders): JsonResponse {
+$applyDefaultHeaders = static function (ResponseInterface $response) use ($defaultResponseHeaders): ResponseInterface {
     foreach ($defaultResponseHeaders as $name => $value) {
         $response = $response->withHeader($name, $value);
     }
@@ -71,6 +81,17 @@ try {
     $pdoFactory = static fn (): PDO => Connection::create($env);
 
     $userRepository = new UserRepository($pdoFactory, $slowQueryLogger);
+    $poiRepository = new PoiRepository($pdoFactory, $slowQueryLogger);
+    $progressRepository = new ProgressRepository($pdoFactory, $slowQueryLogger);
+    $customPinRepository = new CustomPinRepository($pdoFactory, $slowQueryLogger);
+
+    $poiCacheService = new PoiCacheService(
+        $poiRepository,
+        $poiCacheFile,
+        $env->getInt('POI_CACHE_TTL_SECONDS', 300)
+    );
+    $openGraphService = new OpenGraphService();
+
     $jwtService = new JwtService(
         secret: $env->getString('JWT_SECRET', ''),
         ttlSeconds: $env->getInt('JWT_TTL_SECONDS', 604800),
@@ -89,31 +110,76 @@ try {
     $telemetryController = new TelemetryController($appLogger);
     $authController = new AuthController($authService, $userRepository, $securityLogger);
     $profileController = new ProfileController($userRepository);
+    $poiController = new PoiController($poiRepository, $poiCacheService);
+    $progressController = new ProgressController($progressRepository);
+    $customPinController = new CustomPinController($customPinRepository);
+
+    $appBaseUrl = $env->getString('APP_URL', 'http://localhost:8000');
+    $shareController = new ShareController(
+        $poiCacheService,
+        $openGraphService,
+        $appBaseUrl,
+        $env->getString('OG_DEFAULT_IMAGE_URL', rtrim($appBaseUrl, '/') . '/assets/og-leonida.webp')
+    );
 
     $router = new Router();
     $router->get('/api/health', [$healthController, 'handle']);
-    $router->post('/api/telemetry/client-error', static fn (Request $req): JsonResponse => $rateLimiter->limit(
+    $router->post('/api/telemetry/client-error', static fn (Request $req): ResponseInterface => $rateLimiter->limit(
         $req,
         'telemetry_client_error',
         30,
         60,
         [$telemetryController, 'handle']
     ));
-    $router->post('/api/auth/google', static fn (Request $req): JsonResponse => $rateLimiter->limit(
+    $router->post('/api/auth/google', static fn (Request $req): ResponseInterface => $rateLimiter->limit(
         $req,
         'auth_google',
         15,
         60,
         [$authController, 'googleLogin']
     ));
-    $router->get('/api/me', static fn (Request $req): JsonResponse => $authMiddleware->authenticate(
+    $router->get('/api/me', static fn (Request $req): ResponseInterface => $authMiddleware->authenticate(
         $req,
         [$profileController, 'getMe']
     ));
-    $router->patch('/api/me', static fn (Request $req): JsonResponse => $authMiddleware->authenticate(
+    $router->patch('/api/me', static fn (Request $req): ResponseInterface => $authMiddleware->authenticate(
         $req,
         [$profileController, 'updateMe']
     ));
+
+    // Phase 3: Public POIs & Categories (with JSON cache)
+    $router->get('/api/categories', [$poiController, 'listCategories']);
+    $router->get('/api/pois', [$poiController, 'listPois']);
+    $router->get('/api/pois/{id}', [$poiController, 'getPoi']);
+
+    // Phase 3: VIP Cloud Progress & Custom Pins
+    $router->get('/api/progress', static fn (Request $req): ResponseInterface => $authMiddleware->requireVip(
+        $req,
+        [$progressController, 'getProgress']
+    ));
+    $router->put('/api/progress', static fn (Request $req): ResponseInterface => $authMiddleware->requireVip(
+        $req,
+        [$progressController, 'syncProgress']
+    ));
+    $router->get('/api/custom-pins', static fn (Request $req): ResponseInterface => $authMiddleware->requireVip(
+        $req,
+        [$customPinController, 'listPins']
+    ));
+    $router->post('/api/custom-pins', static fn (Request $req): ResponseInterface => $authMiddleware->requireVip(
+        $req,
+        [$customPinController, 'createPin']
+    ));
+    $router->delete('/api/custom-pins/{id}', static fn (Request $req): ResponseInterface => $authMiddleware->requireVip(
+        $req,
+        [$customPinController, 'deletePin']
+    ));
+
+    // Phase 3: Deep Linking & Dynamic OpenGraph for social bots
+    $router->get('/share', [$shareController, 'handle']);
+    $router->get('/share/{id}', [$shareController, 'handle']);
+    if ($shareController->isSocialBotRequest($request)) {
+        $router->get('/', [$shareController, 'handle']);
+    }
 
     $response = $router->dispatch($request);
     $applyDefaultHeaders($response)->emit();
