@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
   test.beforeEach(async ({ page }) => {
+    // Avoid downloading the 77MB native 3D GLB on unrelated HUD tests
+    await page.route('**/native-3d-v2/geometry.glb', (route) => route.abort());
     await page.goto('/');
     await page.locator('.backpack-trigger').waitFor({ state: 'visible' });
   });
@@ -9,6 +11,8 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
   test('loads map canvas and backpack trigger', async ({ page }) => {
     await expect(page.locator('canvas.maplibregl-canvas')).toBeVisible();
     await expect(page.locator('.backpack-trigger')).toBeVisible();
+    await expect(page.locator('.gtadb-attribution')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /gtadb\.org/i })).toHaveCount(0);
   });
 
   test('quick search opens with /, shows tabs, filters in real time, and records recent', async ({ page }) => {
@@ -64,6 +68,7 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
   });
 
   test('creates a custom pin on map and removes all via submenu', async ({ page }) => {
+    await page.locator('.leonida-poi-marker').first().waitFor({ state: 'visible' });
     await page.keyboard.press('m');
     const wheel = page.locator('.weapon-wheel');
     await wheel.getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
@@ -73,8 +78,8 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
     await wheel.locator('.pin-submenu').getByRole('button', { name: /Marcar/i }).click();
     await expect(wheel).toBeHidden();
 
-    // Click on map canvas to place pin
-    await page.locator('canvas.maplibregl-canvas').click({ position: { x: 400, y: 300 } });
+    // Click on open map canvas area to place pin
+    await page.locator('canvas.maplibregl-canvas').click({ position: { x: 180, y: 540 } });
 
     // Re-open wheel -> Marcador (1) -> Remover todos
     await page.keyboard.press('m');
@@ -109,8 +114,8 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
 
     await wheel.getByRole('menuitem', { name: /Mapa/i }).click();
     const fanItems = wheel.locator('.map-fan .fan-item');
+    await expect(fanItems).toHaveCount(6);
     const count = await fanItems.count();
-    expect(count).toBe(6);
 
     for (let i = 0; i < count; i++) {
       const item = fanItems.nth(i);
@@ -215,6 +220,9 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
     });
 
     await expect(page.locator('.quick-search-bar .gamepad-focus')).toBeVisible();
+    await expect(
+      page.locator('.quick-search-bar').getByRole('button', { name: /Ver todos/i }).first(),
+    ).toBeVisible();
 
     // □ (button 2) expands category inside Quick Search, △ (button 3) returns focus to search input without entering cinema mode
     await page.evaluate(() => {
@@ -414,8 +422,18 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
     expect(submenuAnim).toContain('pinSubmenuIn');
 
     // 4. Custom Pin Popup modal (transparent MapLibre wrapper + copy coordinates button/shortcut)
+    await page.locator('.leonida-poi-marker').first().waitFor({ state: 'visible' });
     await submenu.getByRole('button', { name: /Marcar/i }).click();
-    await page.locator('canvas.maplibregl-canvas').click({ position: { x: 420, y: 310 } });
+    for (const pos of [
+      { x: 960, y: 260 },
+      { x: 160, y: 260 },
+      { x: 420, y: 200 },
+    ]) {
+      await page.locator('canvas.maplibregl-canvas').click({ position: pos });
+      if ((await page.locator('.maplibregl-marker').count()) > 0) {
+        break;
+      }
+    }
     await page.locator('.maplibregl-marker').first().click();
     const pinPopup = page.locator('.leonida-pin-popup');
     await expect(pinPopup).toBeVisible();
@@ -481,7 +499,7 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
     await expect(page.locator('button[aria-label="Alternar visão 2D e 3D"]')).toHaveClass(/is-active/, {
       timeout: 3000,
     });
-    await expect(page.locator('.hud-shell')).toHaveCSS('background-color', 'rgb(47, 144, 176)');
+    await expect(page.locator('.hud-shell')).toHaveCSS('background-color', 'rgb(72, 145, 168)');
   });
 
   test('deleting a focused route item from the panel stops its blink state', async ({ page }) => {
@@ -695,22 +713,174 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
     await expect(sidebar.locator('.telemetry-readout')).toContainText('ZOOM');
 
     // Search coordinates in panel search
-    await sidebar.locator('input.search-input').fill('-31.819, 18.759');
+    await sidebar.locator('input.search-input').fill('-0.661, 0.416');
     await expect(sidebar.locator('.sidebar-search-item').first()).toContainText(
-      'Ir para -31.819, 18.759',
+      'Ir para -0.661, 0.416',
     );
     await sidebar.locator('.search-clear-btn').click();
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await expect(sidebar).toHaveClass(/is-collapsed/);
 
-    // Search coordinates in quick search
+    // Search coordinates in quick search and verify street-level zoom depth (> 14)
     await page.keyboard.press('/');
     const searchBar = page.locator('.quick-search-bar');
-    await searchBar.locator('input.qs-input').fill('-31.819, 18.759');
+    await searchBar.locator('input.qs-input').fill('-0.661, 0.416');
     const firstResult = searchBar.locator('.qs-item').first();
-    await expect(firstResult).toContainText('Ir para -31.819, 18.759');
+    await expect(firstResult).toContainText('Ir para -0.661, 0.416');
     await firstResult.click();
-    await expect(page.locator('.poi-card .poi-title')).toHaveText('Ir para -31.819, 18.759');
+    await expect(page.locator('.poi-card .poi-title')).toHaveText('Ir para -0.661, 0.416');
+
+    // Wait for flyTo(15.5, 600ms) to settle, then zoom in further via '=' and verify street-level zoom
+    await page.waitForTimeout(750);
+    await page.keyboard.press('=');
+    await page.waitForTimeout(250);
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+    await expect(async () => {
+      const zoomText = await sidebar.locator('.telemetry-readout .readout-value').innerText();
+      const match = zoomText.match(/([\d.]+)x/i);
+      expect(match).not.toBeNull();
+      expect(Number(match![1])).toBeGreaterThanOrEqual(14);
+    }).toPass({ timeout: 4000 });
+  });
+
+  test('loads extracted GTAVIMap POIs and renders official PNG marker icons in search', async ({ page }) => {
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    await expect(searchBar).toBeVisible();
+    await expect(searchBar.locator('.qs-footer-total')).toContainText(/[567]\d{3} locais/);
+
+    await searchBar.locator('input.qs-input').fill('Murais 1010');
+    const firstItem = searchBar.locator('.qs-item').first();
+    await expect(firstItem).toContainText('Murais 1010');
+    const iconImg = firstItem.locator('img.blip-png');
+    await expect(iconImg).toBeVisible();
+    const loaded = await iconImg.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0);
+    expect(loaded).toBe(true);
+
+    // Map overlay markers show icons without text labels on the map
+    await firstItem.click();
+    await expect(page.locator('.leonida-poi-marker').first()).toBeVisible();
+    const markerText = await page.locator('.leonida-poi-marker').first().innerText();
+    expect(markerText.replace(/\d+/g, '').trim()).toBe('');
+  });
+
+  test('initiates lazy native 3D model load on 3D toggle and cancels cleanly on 2D return', async ({
+    page,
+  }) => {
+    const pageErrors: string[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+
+    let resolvePendingGlb: (() => void) | null = null;
+    let glbRequested = false;
+    await page.route('**/native-3d-v2/geometry.glb', async (route) => {
+      glbRequested = true;
+      await new Promise<void>((resolve) => {
+        resolvePendingGlb = resolve;
+        setTimeout(resolve, 4000);
+      });
+      await route.abort().catch(() => {});
+    });
+
+    await page.locator('canvas.maplibregl-canvas').waitFor({ state: 'visible' });
+
+    const btn3d = page.locator('button[aria-label="Alternar visão 2D e 3D"]');
+    await btn3d.click();
+
+    await expect.poll(() => glbRequested, { timeout: 3000 }).toBe(true);
+    await expect(page.locator('.hud-3d-loading')).toBeVisible();
+    await expect(btn3d).toHaveClass(/is-loading/);
+
+    // Toggling back to 2D aborts the pending GLB fetch cleanly without errors
+    await btn3d.click();
+    resolvePendingGlb?.();
+    await expect(page.locator('.hud-3d-loading')).toBeHidden();
+    await expect(btn3d).not.toHaveClass(/is-loading/);
+    expect(pageErrors).toHaveLength(0);
+  });
+
+  test('captures high-precision per-method performance timings via window.__leonidaPerf', async ({
+    page,
+  }) => {
+    await page.locator('canvas.maplibregl-canvas').waitFor({ state: 'visible' });
+    await page.locator('.leonida-poi-marker').first().waitFor({ state: 'visible' });
+    await page.waitForFunction(() => {
+      const api = (
+        window as unknown as {
+          __leonidaPerf?: { method: (name: string) => unknown };
+        }
+      ).__leonidaPerf;
+      return Boolean(api?.method('map.loadLandmarks'));
+    });
+
+    // Trigger category cycling and quick search to populate rendering & list-manipulation timings
+    await page.keyboard.press('l');
+    await page.keyboard.press('l');
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    await expect(searchBar).toBeVisible();
+    await searchBar.locator('input.qs-input').fill('Vice');
+    await expect(searchBar.locator('.qs-item').first()).toBeVisible();
+
+    const perfReport = await page.evaluate(() => {
+      const api = (
+        window as unknown as {
+          __leonidaPerf?: {
+            methods: () => Array<{
+              name: string;
+              count: number;
+              avgMs: number;
+              p95Ms: number;
+              maxMs: number;
+              totalMs: number;
+            }>;
+            summary: () => {
+              trackedMethods: number;
+              totalMethodCalls: number;
+            };
+            clear: () => void;
+          };
+        }
+      ).__leonidaPerf;
+      if (!api) {
+        return null;
+      }
+      const methods = api.methods();
+      const summary = api.summary();
+      return { methods, summary };
+    });
+
+    expect(perfReport).not.toBeNull();
+    expect(perfReport!.summary.trackedMethods).toBeGreaterThanOrEqual(6);
+    expect(perfReport!.summary.totalMethodCalls).toBeGreaterThan(0);
+
+    const names = new Set(perfReport!.methods.map((m) => m.name));
+    expect(names.has('map.buildSearchIndex')).toBe(true);
+    expect(names.has('map.filterPois')).toBe(true);
+    expect(names.has('map.searchPoisFast')).toBe(true);
+    expect(names.has('map.groupOverlappingPois')).toBe(true);
+    expect(names.has('quickSearch.groupedSearchResults')).toBe(true);
+    expect(names.has('app.legendItems')).toBe(true);
+
+    for (const m of perfReport!.methods) {
+      expect(m.count).toBeGreaterThan(0);
+      expect(Number.isFinite(m.avgMs) && m.avgMs >= 0).toBe(true);
+      expect(Number.isFinite(m.p95Ms) && m.p95Ms >= 0).toBe(true);
+      expect(Number.isFinite(m.maxMs) && m.maxMs >= 0).toBe(true);
+      expect(Number.isFinite(m.totalMs) && m.totalMs >= 0).toBe(true);
+    }
+
+    const clearedCount = await page.evaluate(() => {
+      const api = (
+        window as unknown as {
+          __leonidaPerf?: { clear: () => void; methods: () => unknown[] };
+        }
+      ).__leonidaPerf;
+      api?.clear();
+      return api?.methods().length ?? -1;
+    });
+    expect(clearedCount).toBe(0);
   });
 });

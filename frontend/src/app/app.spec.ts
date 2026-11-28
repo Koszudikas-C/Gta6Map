@@ -17,11 +17,13 @@ describe('App', () => {
     expect(app).toBeTruthy();
   });
 
-  it('should render title', async () => {
+  it('should render title without external gtadb attribution watermark', async () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const compiled = fixture.nativeElement as HTMLElement;
     expect(compiled.querySelector('h1')?.textContent).toContain('MAPA TÁTICO');
+    expect(compiled.querySelector('.gtadb-attribution')).toBeNull();
+    expect(compiled.textContent).not.toContain('gtadb.org');
   });
 
   it('ignores window pointermove when gamepad is disconnected and syncs live coordinates with sidebar state', async () => {
@@ -207,7 +209,7 @@ describe('App', () => {
       (fixture.nativeElement as HTMLElement).querySelector('.hud-sidebar')?.textContent ?? '';
     expect(sidebarText).not.toContain('COORD.');
     app.selectCategory('Todas');
-    app.onSearchInput({ target: { value: '21.515, 17.246' } } as unknown as Event);
-    expect(app.sidebarSearchResults()[0]?.name).toBe('Ir para 21.515, 17.246');
+    app.onSearchInput({ target: { value: '-0.661, 0.416' } } as unknown as Event);
+    expect(app.sidebarSearchResults()[0]?.name).toBe('Ir para -0.661, 0.416');
   });
 });
