@@ -39,6 +39,7 @@ import { LeonidaPoi, POI_CATEGORIES } from './core/data/leonida-map.data';
 import { DpadDirection, GamepadService } from './core/services/gamepad.service';
 import { MapService } from './core/services/map.service';
 import { PlatformContextService } from './core/services/platform-context.service';
+import { TelemetryService } from './core/services/telemetry.service';
 import { HudConsoleBarComponent } from './features/hud/hud-console-bar.component';
 import { HudDesktopBarComponent } from './features/hud/hud-desktop-bar.component';
 import { HudMobileDialComponent } from './features/hud/hud-mobile-dial.component';
@@ -67,6 +68,7 @@ export class App implements AfterViewInit, OnDestroy {
   readonly mapService = inject(MapService);
   readonly gamepadService = inject(GamepadService);
   readonly platform = inject(PlatformContextService);
+  private readonly telemetry = inject(TelemetryService);
   private readonly platformId = inject(PLATFORM_ID);
   private readonly ngZone = inject(NgZone);
 
@@ -114,22 +116,29 @@ export class App implements AfterViewInit, OnDestroy {
   });
   readonly legendItems = computed<
     ReadonlyArray<{ category: string; meaning: string; count: number }>
-  >(() => {
-    const dynamicGroups = this.mapService.groupedPoisByCategory();
-    return [
-      {
-        category: 'Todas',
-        meaning: 'Exibir todos os pontos no mapa',
-        count: this.mapService.totalPoisCount(),
+  >(() =>
+    this.telemetry.measure(
+      'app.legendItems',
+      () => {
+        const dynamicGroups = this.mapService.groupedPoisByCategory();
+        return [
+          {
+            category: 'Todas',
+            meaning: 'Exibir todos os pontos no mapa',
+            count: this.mapService.totalPoisCount(),
+          },
+          ...dynamicGroups.map((group) => ({
+            category: group.category,
+            meaning: this.getCategoryMeaning(group.category),
+            count: group.items.length,
+          })),
+          { category: 'Ocultos', meaning: 'Ocultar pontos de referência', count: 0 },
+        ];
       },
-      ...dynamicGroups.map((group) => ({
-        category: group.category,
-        meaning: this.getCategoryMeaning(group.category),
-        count: group.items.length,
-      })),
-      { category: 'Ocultos', meaning: 'Ocultar pontos de referência', count: 0 },
-    ];
-  });
+      (items) => ({ count: items.length }),
+      6,
+    ),
+  );
   readonly activeLegendItem = computed(
     () =>
       this.legendItems().find((item) => item.category === this.selectedCategory()) ??
@@ -330,194 +339,208 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
-    const hasModalOpen =
-      this.quickSearchOpen() ||
-      this.wheelOpen() ||
-      Boolean(document.querySelector('.maplibregl-popup')) ||
-      Boolean(this.mapService.selectedPoi()) ||
-      this.sidebarOpen();
+    this.telemetry.measure(
+      'app.stepGamepadFocus',
+      () => {
+        const hasModalOpen =
+          this.quickSearchOpen() ||
+          this.wheelOpen() ||
+          Boolean(document.querySelector('.maplibregl-popup')) ||
+          Boolean(this.mapService.selectedPoi()) ||
+          this.sidebarOpen();
 
-    if (!hasModalOpen) {
-      this.stepMapTargetFocus(direction);
-      return;
-    }
-
-    const scopeSelector = this.quickSearchOpen()
-      ? '.quick-search-bar'
-      : this.wheelOpen()
-        ? document.querySelector('.pin-submenu')
-          ? '.pin-submenu'
-          : '.weapon-wheel'
-        : document.querySelector('.maplibregl-popup')
-          ? '.maplibregl-popup'
-          : this.sidebarOpen()
-            ? '.hud-sidebar:not(.is-collapsed)'
-            : '.poi-card';
-
-    const root = document.querySelector(scopeSelector) ?? document;
-    const candidates = Array.from(
-      root.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter((el) => {
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
-    });
-
-    if (candidates.length === 0) {
-      return;
-    }
-
-    const active =
-      (root.querySelector('.gamepad-focus') as HTMLElement | null) ??
-      (document.activeElement as HTMLElement | null);
-    let target: HTMLElement | null = null;
-
-    if (!active || !candidates.includes(active)) {
-      target =
-        direction === 'up' || direction === 'left'
-          ? candidates[candidates.length - 1]
-          : candidates[0];
-    } else {
-      const origin = active.getBoundingClientRect();
-      const ox = origin.left + origin.width / 2;
-      const oy = origin.top + origin.height / 2;
-
-      let bestScore = Number.POSITIVE_INFINITY;
-      for (const el of candidates) {
-        if (el === active) {
-          continue;
+        if (!hasModalOpen) {
+          this.stepMapTargetFocus(direction);
+          return;
         }
-        const rect = el.getBoundingClientRect();
-        const cx = rect.left + rect.width / 2;
-        const cy = rect.top + rect.height / 2;
 
-        let valid = false;
-        let primary = 0;
-        let secondary = 0;
-        let aligned = false;
+        const scopeSelector = this.quickSearchOpen()
+          ? '.quick-search-bar'
+          : this.wheelOpen()
+            ? document.querySelector('.pin-submenu')
+              ? '.pin-submenu'
+              : '.weapon-wheel'
+            : document.querySelector('.maplibregl-popup')
+              ? '.maplibregl-popup'
+              : this.sidebarOpen()
+                ? '.hud-sidebar:not(.is-collapsed)'
+                : '.poi-card';
 
-        if (direction === 'down') {
-          valid = cy > oy + 4;
-          primary = cy - oy;
-          secondary = Math.abs(cx - ox);
-          aligned = Math.min(origin.right, rect.right) - Math.max(origin.left, rect.left) > 0;
-        } else if (direction === 'up') {
-          valid = cy < oy - 4;
-          primary = oy - cy;
-          secondary = Math.abs(cx - ox);
-          aligned = Math.min(origin.right, rect.right) - Math.max(origin.left, rect.left) > 0;
-        } else if (direction === 'right') {
-          valid = cx > ox + 4;
-          primary = cx - ox;
-          secondary = Math.abs(cy - oy);
-          aligned = Math.min(origin.bottom, rect.bottom) - Math.max(origin.top, rect.top) > 0;
+        const root = document.querySelector(scopeSelector) ?? document;
+        const candidates = Array.from(
+          root.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((el) => {
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+        });
+
+        if (candidates.length === 0) {
+          return;
+        }
+
+        const active =
+          (root.querySelector('.gamepad-focus') as HTMLElement | null) ??
+          (document.activeElement as HTMLElement | null);
+        let target: HTMLElement | null = null;
+
+        if (!active || !candidates.includes(active)) {
+          target =
+            direction === 'up' || direction === 'left'
+              ? candidates[candidates.length - 1]
+              : candidates[0];
         } else {
-          valid = cx < ox - 4;
-          primary = ox - cx;
-          secondary = Math.abs(cy - oy);
-          aligned = Math.min(origin.bottom, rect.bottom) - Math.max(origin.top, rect.top) > 0;
+          const origin = active.getBoundingClientRect();
+          const ox = origin.left + origin.width / 2;
+          const oy = origin.top + origin.height / 2;
+
+          let bestScore = Number.POSITIVE_INFINITY;
+          for (const el of candidates) {
+            if (el === active) {
+              continue;
+            }
+            const rect = el.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+
+            let valid = false;
+            let primary = 0;
+            let secondary = 0;
+            let aligned = false;
+
+            if (direction === 'down') {
+              valid = cy > oy + 4;
+              primary = cy - oy;
+              secondary = Math.abs(cx - ox);
+              aligned = Math.min(origin.right, rect.right) - Math.max(origin.left, rect.left) > 0;
+            } else if (direction === 'up') {
+              valid = cy < oy - 4;
+              primary = oy - cy;
+              secondary = Math.abs(cx - ox);
+              aligned = Math.min(origin.right, rect.right) - Math.max(origin.left, rect.left) > 0;
+            } else if (direction === 'right') {
+              valid = cx > ox + 4;
+              primary = cx - ox;
+              secondary = Math.abs(cy - oy);
+              aligned = Math.min(origin.bottom, rect.bottom) - Math.max(origin.top, rect.top) > 0;
+            } else {
+              valid = cx < ox - 4;
+              primary = ox - cx;
+              secondary = Math.abs(cy - oy);
+              aligned = Math.min(origin.bottom, rect.bottom) - Math.max(origin.top, rect.top) > 0;
+            }
+
+            if (!valid) {
+              continue;
+            }
+
+            if ((direction === 'left' || direction === 'right') && !aligned) {
+              continue;
+            }
+
+            const score = primary + (aligned ? secondary * 0.25 : secondary * 2.5);
+            if (score < bestScore) {
+              bestScore = score;
+              target = el;
+            }
+          }
         }
 
-        if (!valid) {
-          continue;
+        if (!target) {
+          return;
         }
 
-        if ((direction === 'left' || direction === 'right') && !aligned) {
-          continue;
+        for (const prev of Array.from(document.querySelectorAll('.gamepad-focus'))) {
+          prev.classList.remove('gamepad-focus');
         }
+        target.classList.add('gamepad-focus');
+        target.focus({ preventScroll: false });
+        target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
-        const score = primary + (aligned ? secondary * 0.25 : secondary * 2.5);
-        if (score < bestScore) {
-          bestScore = score;
-          target = el;
-        }
-      }
-    }
-
-    if (!target) {
-      return;
-    }
-
-    for (const prev of Array.from(document.querySelectorAll('.gamepad-focus'))) {
-      prev.classList.remove('gamepad-focus');
-    }
-    target.classList.add('gamepad-focus');
-    target.focus({ preventScroll: false });
-    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-
-    const rect = target.getBoundingClientRect();
-    this.gamepadService.setCursorPosition(
-      rect.left + rect.width / 2,
-      rect.top + rect.height / 2,
-      true,
+        const rect = target.getBoundingClientRect();
+        this.gamepadService.setCursorPosition(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+          true,
+        );
+      },
+      { direction },
+      8,
     );
   }
 
   private stepMapTargetFocus(direction: DpadDirection): void {
-    const targets = this.mapService.getVisibleMapTargets();
-    if (targets.length === 0) {
-      return;
-    }
-
-    const ox = this.gamepadService.cursorX();
-    const oy = this.gamepadService.cursorY();
-    let best: { x: number; y: number } | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
-
-    for (const t of targets) {
-      const dx = t.x - ox;
-      const dy = t.y - oy;
-      if (Math.hypot(dx, dy) < 6) {
-        continue;
-      }
-
-      let valid = false;
-      let primary = 0;
-      let secondary = 0;
-      if (direction === 'down') {
-        valid = dy > 6;
-        primary = dy;
-        secondary = Math.abs(dx);
-      } else if (direction === 'up') {
-        valid = dy < -6;
-        primary = -dy;
-        secondary = Math.abs(dx);
-      } else if (direction === 'right') {
-        valid = dx > 6;
-        primary = dx;
-        secondary = Math.abs(dy);
-      } else {
-        valid = dx < -6;
-        primary = -dx;
-        secondary = Math.abs(dy);
-      }
-
-      if (!valid) {
-        continue;
-      }
-      const score = primary + secondary * 1.4;
-      if (score < bestScore) {
-        bestScore = score;
-        best = t;
-      }
-    }
-
-    if (!best) {
-      // Fallback: snap to nearest visible POI/pin if cursor isn't near any in that direction
-      let nearestDist = Number.POSITIVE_INFINITY;
-      for (const t of targets) {
-        const d = Math.hypot(t.x - ox, t.y - oy);
-        if (d > 6 && d < nearestDist) {
-          nearestDist = d;
-          best = t;
+    this.telemetry.measure(
+      'app.stepMapTargetFocus',
+      () => {
+        const targets = this.mapService.getVisibleMapTargets();
+        if (targets.length === 0) {
+          return;
         }
-      }
-    }
 
-    if (best) {
-      this.gamepadService.setCursorPosition(best.x, best.y, false);
-    }
+        const ox = this.gamepadService.cursorX();
+        const oy = this.gamepadService.cursorY();
+        let best: { x: number; y: number } | null = null;
+        let bestScore = Number.POSITIVE_INFINITY;
+
+        for (const t of targets) {
+          const dx = t.x - ox;
+          const dy = t.y - oy;
+          if (Math.hypot(dx, dy) < 6) {
+            continue;
+          }
+
+          let valid = false;
+          let primary = 0;
+          let secondary = 0;
+          if (direction === 'down') {
+            valid = dy > 6;
+            primary = dy;
+            secondary = Math.abs(dx);
+          } else if (direction === 'up') {
+            valid = dy < -6;
+            primary = -dy;
+            secondary = Math.abs(dx);
+          } else if (direction === 'right') {
+            valid = dx > 6;
+            primary = dx;
+            secondary = Math.abs(dy);
+          } else {
+            valid = dx < -6;
+            primary = -dx;
+            secondary = Math.abs(dy);
+          }
+
+          if (!valid) {
+            continue;
+          }
+          const score = primary + secondary * 1.4;
+          if (score < bestScore) {
+            bestScore = score;
+            best = t;
+          }
+        }
+
+        if (!best) {
+          // Fallback: snap to nearest visible POI/pin if cursor isn't near any in that direction
+          let nearestDist = Number.POSITIVE_INFINITY;
+          for (const t of targets) {
+            const d = Math.hypot(t.x - ox, t.y - oy);
+            if (d > 6 && d < nearestDist) {
+              nearestDist = d;
+              best = t;
+            }
+          }
+        }
+
+        if (best) {
+          this.gamepadService.setCursorPosition(best.x, best.y, false);
+        }
+      },
+      { direction },
+      8,
+    );
   }
 
   toggleFullscreen(): void {
@@ -656,6 +679,10 @@ export class App implements AfterViewInit, OnDestroy {
       acessiveis: 'Locais e entradas acessíveis',
       eventos: 'Eventos, shows e atividades',
       natureza: 'Parques, trilhas e reservas',
+      'saltos e acrobacias': 'Rampas de salto e acrobacias aéreas',
+      'atividades e esportes': 'Esportes, corridas, pesca e lazer',
+      'operacoes ilegais': 'Operações e contratos ilegais',
+      'veiculos especiais': 'Spawns de veículos raros e especiais',
     };
     return meanings[norm] ?? 'Pontos desta categoria no mapa';
   }

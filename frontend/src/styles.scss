@@ -48,7 +48,7 @@ body {
   width: 100dvw;
   height: 100dvh;
   overflow: hidden;
-  background-color: #2F90B0;
+  background-color: #4891a8;
   color: var(--text-cream);
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
@@ -272,6 +272,15 @@ body,
     flex-shrink: 0;
     pointer-events: none;
   }
+
+  img.leonida-poi-png {
+    width: 68%;
+    height: 68%;
+    object-fit: contain;
+    display: block;
+    flex-shrink: 0;
+    pointer-events: none;
+  }
 }
 
 .leonida-poi-stack-pill {
@@ -291,4 +300,32 @@ body,
   line-height: 12px;
   text-align: center;
   pointer-events: none;
+}
+
+.icon-btn.is-loading {
+  border-color: var(--palm-teal) !important;
+  color: var(--palm-teal) !important;
+  animation: hud3dPulse 1.1s ease-in-out infinite;
+}
+
+.hud-3d-loading {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  height: 48px;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--palm-teal);
+  border-color: rgba(76, 224, 210, 0.45);
+  white-space: nowrap;
+}
+
+@keyframes hud3dPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.62;
+  }
 }

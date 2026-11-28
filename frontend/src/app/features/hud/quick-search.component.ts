@@ -25,6 +25,7 @@ import { LeonidaPoi } from '../../core/data/leonida-map.data';
 import { getPoiCategoryMeta } from '../../core/data/poi-category-icons';
 import { MapService } from '../../core/services/map.service';
 import { PlatformContextService } from '../../core/services/platform-context.service';
+import { TelemetryService } from '../../core/services/telemetry.service';
 import { PoiBlipIconComponent } from '../../shared/components/poi-blip-icon.component';
 import { ShortcutKeyBadgeComponent } from '../../shared/components/shortcut-key-badge.component';
 
@@ -171,7 +172,7 @@ function loadPoiHits(): Record<string, number> {
                           [class.is-highlighted]="isPoiHighlighted(poi)"
                           (click)="choosePoi(poi)"
                         >
-                          <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [size]="30" variant="badge" />
+                          <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [iconName]="poi.icon ?? ''" [size]="30" variant="badge" />
                           <div class="qs-item-info">
                             <span class="qs-item-name">{{ poi.name }}</span>
                             <span class="qs-item-region">{{ poi.region }}</span>
@@ -327,7 +328,7 @@ function loadPoiHits(): Record<string, number> {
                           [class.is-highlighted]="isPoiHighlighted(poi)"
                           (click)="choosePoi(poi)"
                         >
-                          <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [size]="30" variant="badge" />
+                          <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [iconName]="poi.icon ?? ''" [size]="30" variant="badge" />
                           <div class="qs-item-info">
                             <span class="qs-item-name">{{ poi.name }}</span>
                             <span class="qs-item-region">{{ poi.region }}</span>
@@ -360,7 +361,7 @@ function loadPoiHits(): Record<string, number> {
                         [class.is-highlighted]="isPoiHighlighted(poi)"
                         (click)="choosePoi(poi)"
                       >
-                        <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [size]="30" variant="badge" />
+                        <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [iconName]="poi.icon ?? ''" [size]="30" variant="badge" />
                         <div class="qs-item-info">
                           <span class="qs-item-name">{{ poi.name }}</span>
                           <span class="qs-item-region">{{ poi.region }}</span>
@@ -411,7 +412,7 @@ function loadPoiHits(): Record<string, number> {
                       >
                         #{{ idx + 1 }}
                       </span>
-                      <app-poi-blip-icon [category]="entry.poi.category" [itemName]="entry.poi.name" [size]="28" variant="badge" />
+                      <app-poi-blip-icon [category]="entry.poi.category" [itemName]="entry.poi.name" [iconName]="entry.poi.icon ?? ''" [size]="28" variant="badge" />
                       <div class="qs-item-info">
                         <span class="qs-item-name">{{ entry.poi.name }}</span>
                         <span class="qs-item-region">{{ entry.poi.region }}</span>
@@ -1254,6 +1255,7 @@ function loadPoiHits(): Record<string, number> {
 })
 export class QuickSearchComponent {
   private readonly mapService = inject(MapService);
+  private readonly telemetry = inject(TelemetryService);
   readonly platform = inject(PlatformContextService);
   private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('quickSearchInput');
 
@@ -1291,11 +1293,18 @@ export class QuickSearchComponent {
 
   readonly filteredCategoryGroups = computed(() => {
     const selected = this.selectedCategoryFilter();
-    if (selected === 'Todas') {
-      return this.allCategoryGroups();
-    }
-    const items = this.mapService.getPoisByCategory(selected);
-    return items.length > 0 ? [{ category: selected, items }] : [];
+    return this.telemetry.measure(
+      'quickSearch.filteredCategoryGroups',
+      () => {
+        if (selected === 'Todas') {
+          return this.allCategoryGroups();
+        }
+        const items = this.mapService.getPoisByCategory(selected);
+        return items.length > 0 ? [{ category: selected, items }] : [];
+      },
+      (groups) => ({ filter: selected, groupCount: groups.length }),
+      6,
+    );
   });
 
   readonly searchResults = computed(() =>
@@ -1303,44 +1312,66 @@ export class QuickSearchComponent {
   );
 
   readonly groupedSearchResults = computed(() => {
-    const groups = new Map<string, LeonidaPoi[]>();
-    for (const poi of this.searchResults()) {
-      let bucket = groups.get(poi.category);
-      if (!bucket) {
-        bucket = [];
-        groups.set(poi.category, bucket);
-      }
-      bucket.push(poi);
-    }
-    return Array.from(groups.entries()).map(([category, items]) => ({ category, items }));
+    const results = this.searchResults();
+    return this.telemetry.measure(
+      'quickSearch.groupedSearchResults',
+      () => {
+        const groups = new Map<string, LeonidaPoi[]>();
+        for (const poi of results) {
+          let bucket = groups.get(poi.category);
+          if (!bucket) {
+            bucket = [];
+            groups.set(poi.category, bucket);
+          }
+          bucket.push(poi);
+        }
+        return Array.from(groups.entries()).map(([category, items]) => ({ category, items }));
+      },
+      (groups) => ({ inputCount: results.length, groupCount: groups.length }),
+      6,
+    );
   });
 
   readonly popularPois = computed(() => {
     const hits = this.poiHits();
     const recent = this.recentPois();
-    const featured = this.mapService.getFeaturedPois(12);
-    const pool = new Map<string, LeonidaPoi>();
-    for (const poi of [...recent, ...featured]) {
-      pool.set(poi.id, poi);
-    }
-    return Array.from(pool.values())
-      .map((poi) => ({ poi, hits: hits[poi.id] ?? 0 }))
-      .sort((a, b) => b.hits - a.hits)
-      .slice(0, 8);
+    return this.telemetry.measure(
+      'quickSearch.popularPois',
+      () => {
+        const featured = this.mapService.getFeaturedPois(12);
+        const pool = new Map<string, LeonidaPoi>();
+        for (const poi of [...recent, ...featured]) {
+          pool.set(poi.id, poi);
+        }
+        return Array.from(pool.values())
+          .map((poi) => ({ poi, hits: hits[poi.id] ?? 0 }))
+          .sort((a, b) => b.hits - a.hits)
+          .slice(0, 8);
+      },
+      (list) => ({ count: list.length }),
+      6,
+    );
   });
 
   readonly visibleFlatItems = computed<LeonidaPoi[]>(() => {
-    if (this.query().trim().length > 0) {
-      return this.groupedSearchResults().flatMap((g) => g.items);
-    }
     const tab = this.activeTab();
-    if (tab === 'categories') {
-      return this.filteredCategoryGroups().flatMap((g) => this.getVisibleItemsForGroup(g));
-    }
-    if (tab === 'recent') {
-      return this.recentPois();
-    }
-    return this.popularPois().map((entry) => entry.poi);
+    return this.telemetry.measure(
+      'quickSearch.visibleFlatItems',
+      () => {
+        if (this.query().trim().length > 0) {
+          return this.groupedSearchResults().flatMap((g) => g.items);
+        }
+        if (tab === 'categories') {
+          return this.filteredCategoryGroups().flatMap((g) => this.getVisibleItemsForGroup(g));
+        }
+        if (tab === 'recent') {
+          return this.recentPois();
+        }
+        return this.popularPois().map((entry) => entry.poi);
+      },
+      (list) => ({ count: list.length, tab }),
+      6,
+    );
   });
 
   focusInput(): void {

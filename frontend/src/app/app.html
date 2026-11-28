@@ -176,7 +176,7 @@
                         [class.is-highlighted]="sidebarSearchIndex() === idx"
                         (click)="selectSidebarSearchResult(poi)"
                       >
-                        <app-poi-blip-icon [category]="poi.category" [size]="16" variant="badge" />
+                        <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [iconName]="poi.icon ?? ''" [size]="16" variant="badge" />
                         <span class="sidebar-search-item-text">
                           <span class="sidebar-search-item-name">{{ poi.name }}</span>
                           <span class="sidebar-search-item-sub">{{ poi.region }} · {{ poi.category }}</span>
@@ -318,6 +318,7 @@
         type="button"
         class="hud-panel icon-btn"
         [class.is-active]="mapService.is3DMode()"
+        [class.is-loading]="mapService.is3DLoading()"
         (click)="mapService.toggle3D()"
         [attr.data-tooltip]="platform.toggle3DTooltip()"
         aria-label="Alternar visão 2D e 3D"
@@ -343,6 +344,11 @@
       >
         <lucide-icon [img]="icons.LocateFixed" [size]="20" [strokeWidth]="1.75" />
       </button>
+      @if (mapService.is3DLoading()) {
+        <div class="hud-panel hud-3d-loading font-mono-tactical" role="status" aria-live="polite">
+          Carregando prédios 3D...
+        </div>
+      }
     </div>
 
     <!-- Top-Right Semi-Transparent Cyberpunk-Style Map Filter HUD -->
@@ -402,15 +408,6 @@
 
       <span class="map-legend-meaning">{{ activeLegend.meaning }}</span>
     </section>
-
-    <a
-      class="gtadb-attribution font-mono-tactical"
-      href="https://map.gtadb.org"
-      target="_blank"
-      rel="noopener noreferrer"
-    >
-      Mapa &amp; Landmarks: gtadb.org (CC BY 4.0)
-    </a>
 
     <!-- POI Detail Mini-Card -->
     @if (mapService.selectedPoi(); as poi) {
