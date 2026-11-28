@@ -1,11 +1,15 @@
 import { Injectable, NgZone, inject, isDevMode, signal } from '@angular/core';
 import { GeoJSONSource, Map as MapLibreMap, Marker, Popup, StyleSpecification, setWorkerUrl } from 'maplibre-gl';
+import type { Native3DCustomLayer } from './native-3d-layer';
 import { buildLeonida3DBuildings } from '../data/leonida-3d-buildings';
 import {
   LEONIDA_MAP_CONFIG,
   LEONIDA_POIS,
   LeonidaPoi,
   MapQualityMode,
+  gtaviGameToLngLat,
+  legacyLeonidaToGtaviLngLat,
+  normalizeToMapLngLat,
   poisToGeoJson,
 } from '../data/leonida-map.data';
 import {
@@ -13,6 +17,7 @@ import {
   POI_BLIP_CATALOG,
   PoiBlipId,
   buildMapBlipSvg,
+  getPoiIconUrl,
   getPoiItemMeta,
   renderLucideIconElements,
 } from '../data/poi-category-icons';
@@ -74,16 +79,18 @@ interface LeonidaAssetUrls {
   demTilesUrl: string;
   apiPoisUrl: string;
   landmarksUrl: string;
+  native3DThemeBaseUrl: string;
 }
 
 function resolveAssetUrls(): LeonidaAssetUrls {
   const baseUrl = typeof document !== 'undefined' ? new URL('.', document.baseURI).href : '/';
   return {
     workerUrl: `${baseUrl}maplibre-gl-worker.mjs`,
-    satelliteTilesUrl: `${baseUrl}tiles/${LEONIDA_MAP_CONFIG.styles.satellite.id}/{z}/{x}/{y}.webp`,
+    satelliteTilesUrl: LEONIDA_MAP_CONFIG.tileUrl,
     demTilesUrl: `${baseUrl}tiles/dem/{z}/{x}/{y}.png`,
     apiPoisUrl: `${baseUrl}api/pois`,
     landmarksUrl: `${baseUrl}data/leonida-landmarks.json`,
+    native3DThemeBaseUrl: `${baseUrl}${LEONIDA_MAP_CONFIG.native3D.themePath}`,
   };
 }
 
@@ -91,7 +98,7 @@ function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
   const oceanColor = LEONIDA_MAP_CONFIG.styles.satellite.oceanColor;
   return {
     version: 8,
-    name: 'Leonida GTADB Map',
+    name: 'Leonida Interactive Map',
     sky: {
       'sky-color': oceanColor,
       'horizon-color': oceanColor,
@@ -103,6 +110,7 @@ function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
       'leonida-satellite': {
         type: 'raster',
         tiles: [urls.satelliteTilesUrl],
+        bounds: LEONIDA_MAP_CONFIG.tileBounds,
         tileSize: LEONIDA_MAP_CONFIG.tileSize,
         minzoom: LEONIDA_MAP_CONFIG.minZoom,
         maxzoom: LEONIDA_MAP_CONFIG.styles.satellite.maxZoom,
@@ -111,7 +119,7 @@ function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
       'leonida-dem': {
         type: 'raster-dem',
         tiles: [urls.demTilesUrl],
-        tileSize: LEONIDA_MAP_CONFIG.tileSize,
+        tileSize: 512,
         encoding: 'terrarium',
         minzoom: 0,
         maxzoom: 1,
@@ -119,7 +127,7 @@ function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
       'leonida-hillshade-dem': {
         type: 'raster-dem',
         tiles: [urls.demTilesUrl],
-        tileSize: LEONIDA_MAP_CONFIG.tileSize,
+        tileSize: 512,
         encoding: 'terrarium',
         minzoom: 0,
         maxzoom: 1,
@@ -162,7 +170,11 @@ function loadSavedCustomPins(): CustomMapPin[] {
     const raw = localStorage.getItem(CUSTOM_PINS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((p: CustomMapPin) => {
+      const [lng, lat] = normalizeToMapLngLat(Number(p.lng), Number(p.lat));
+      return { ...p, lng, lat };
+    });
   } catch {
     return [];
   }
@@ -174,16 +186,26 @@ export function parseCoordinateQuery(raw: string): { lng: number; lat: number } 
   if (!match) {
     return null;
   }
-  const lng = Number(match[1]);
-  const lat = Number(match[2]);
-  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+  const first = Number(match[1]);
+  const second = Number(match[2]);
+  if (!Number.isFinite(first) || !Number.isFinite(second)) {
     return null;
   }
   const [[minLng, minLat], [maxLng, maxLat]] = LEONIDA_MAP_CONFIG.maxBounds;
-  if (lng < minLng || lng > maxLng || lat < minLat || lat > maxLat) {
-    return null;
+  if (first >= minLng && first <= maxLng && second >= minLat && second <= maxLat) {
+    return { lng: first, lat: second };
   }
-  return { lng, lat };
+  if (first >= -135 && first <= 80 && second >= -75 && second <= 78) {
+    const [lng, lat] = legacyLeonidaToGtaviLngLat(first, second);
+    return { lng, lat };
+  }
+  if (Math.abs(first) <= 16000 && Math.abs(second) <= 16000) {
+    const [lng, lat] = gtaviGameToLngLat(first, second);
+    if (lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat) {
+      return { lng, lat };
+    }
+  }
+  return null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -199,7 +221,14 @@ export class MapService {
   private poiOverlayEl: HTMLElement | null = null;
   private poiMarkerNodes = new Map<
     string,
-    { el: HTMLButtonElement; iconKey: string; stackCount: number; lng: number; lat: number }
+    {
+      el: HTMLButtonElement;
+      iconKey: string;
+      iconName: string;
+      stackCount: number;
+      lng: number;
+      lat: number;
+    }
   >();
   private lastPoiOverlaySize = -1;
   private fpsRafId: number | null = null;
@@ -215,9 +244,14 @@ export class MapService {
   private lastPinSize = -1;
   private trackLiveCoordinates = false;
   private isMapMoving = false;
+  private native3DLayer: Native3DCustomLayer | null = null;
+  private native3DAbort: AbortController | null = null;
+  private native3DAssetsBase = '';
 
   readonly isLoaded = signal(false);
   readonly is3DMode = signal(false);
+  readonly is3DLoading = signal(false);
+  readonly native3DActive = signal(false);
   readonly isPinMode = signal(false);
   readonly customPins = signal<CustomMapPin[]>(loadSavedCustomPins());
   readonly qualityMode = signal<MapQualityMode>(loadInitialQualityMode());
@@ -244,6 +278,7 @@ export class MapService {
       try {
         const initStart = performance.now();
         const urls = resolveAssetUrls();
+        this.native3DAssetsBase = urls.native3DThemeBaseUrl;
         setWorkerUrl(urls.workerUrl);
 
         const map = new MapLibreMap({
@@ -251,8 +286,11 @@ export class MapService {
           style: buildLeonidaStyle(urls),
           center: LEONIDA_MAP_CONFIG.initialCenter,
           zoom: LEONIDA_MAP_CONFIG.initialZoom,
-          minZoom: 0.5,
-          maxZoom: this.qualityMode() === 'hd' ? 6.0 : 4.5,
+          minZoom: 8.5,
+          maxZoom:
+            this.qualityMode() === 'hd'
+              ? LEONIDA_MAP_CONFIG.hdMaxZoom
+              : LEONIDA_MAP_CONFIG.lightMaxZoom,
           maxBounds: LEONIDA_MAP_CONFIG.maxBounds,
           renderWorldCopies: false,
           pitch: 0,
@@ -370,7 +408,8 @@ export class MapService {
     if (!this.map) {
       return;
     }
-    const nextMaxZoom = mode === 'hd' ? 6.0 : 4.5;
+    const nextMaxZoom =
+      mode === 'hd' ? LEONIDA_MAP_CONFIG.hdMaxZoom : LEONIDA_MAP_CONFIG.lightMaxZoom;
     this.ngZone.runOutsideAngular(() => {
       this.map?.setMaxZoom(nextMaxZoom);
       if ((this.map?.getZoom() ?? 0) > nextMaxZoom) {
@@ -391,18 +430,164 @@ export class MapService {
       if (next) {
         this.map?.easeTo({ pitch: 58, bearing: -18, duration: 420 });
         this.map?.once('moveend', () => {
-          if (!this.is3DMode() || !this.map) {
+          if (!this.is3DMode() || !this.map || this.native3DActive()) {
             return;
           }
-          this.map.setTerrain({ source: 'leonida-dem', exaggeration: 4 });
-          this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'visible');
-          this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'visible');
+          this.apply3DFallbackState(true);
         });
+        void this.activateNative3DLayer();
       } else {
-        this.map?.setTerrain(null);
-        this.map?.setLayoutProperty('leonida-hillshade', 'visibility', 'none');
-        this.map?.setLayoutProperty('leonida-buildings-3d', 'visibility', 'none');
+        this.unmountNative3DLayer();
+        this.apply3DFallbackState(false);
         this.map?.easeTo({ pitch: 0, bearing: 0, duration: 380 });
+      }
+    });
+  }
+
+  private apply3DFallbackState(enabled: boolean): void {
+    if (!this.map) {
+      return;
+    }
+    if (enabled) {
+      if (this.map.getSource('leonida-dem')) {
+        this.map.setTerrain({ source: 'leonida-dem', exaggeration: 0.08 });
+      }
+      if (this.map.getLayer('leonida-hillshade')) {
+        this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'visible');
+      }
+      if (this.map.getLayer('leonida-buildings-3d')) {
+        this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'visible');
+      }
+    } else {
+      this.map.setTerrain(null);
+      if (this.map.getLayer('leonida-hillshade')) {
+        this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'none');
+      }
+      if (this.map.getLayer('leonida-buildings-3d')) {
+        this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'none');
+      }
+    }
+  }
+
+  private async activateNative3DLayer(): Promise<void> {
+    if (!this.map || !this.is3DMode()) {
+      return;
+    }
+    if (this.native3DLayer) {
+      this.mountNative3DLayer(this.native3DLayer);
+      return;
+    }
+
+    this.native3DAbort?.abort();
+    const controller = new AbortController();
+    this.native3DAbort = controller;
+    this.ngZone.run(() => this.is3DLoading.set(true));
+
+    try {
+      const { createNative3DLayer } = await import('./native-3d-layer');
+      const layer = await this.telemetry.measureAsync(
+        'map.activateNative3DLayer',
+        () =>
+          createNative3DLayer({
+            signal: controller.signal,
+            geometryUrl: LEONIDA_MAP_CONFIG.native3D.geometryUrl,
+            themeBaseUrl: this.native3DAssetsBase,
+            fallbackThemeBaseUrl: LEONIDA_MAP_CONFIG.native3D.fallbackThemeBaseUrl,
+            theme: 'day',
+            onTiming: (name, durationMs, meta, slowThresholdMs) =>
+              this.telemetry.recordTiming(name, durationMs, meta, slowThresholdMs),
+          }),
+        { layer: 'native-pause-map-3d' },
+        5000,
+      );
+
+      if (controller.signal.aborted || !this.map || !this.is3DMode()) {
+        layer.dispose();
+        return;
+      }
+
+      this.native3DLayer = layer;
+      this.mountNative3DLayer(layer);
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        // Fallback 3D layer remains active if native 3D GLB fails to download
+      }
+    } finally {
+      if (this.native3DAbort === controller) {
+        this.native3DAbort = null;
+        this.ngZone.run(() => this.is3DLoading.set(false));
+      }
+    }
+  }
+
+  private mountNative3DLayer(layer: Native3DCustomLayer): void {
+    if (!this.map) {
+      return;
+    }
+    this.telemetry.measure(
+      'map.mountNative3DLayer',
+      () => {
+        this.ngZone.runOutsideAngular(() => {
+          if (!this.map) {
+            return;
+          }
+          this.map.setTerrain(null);
+          if (this.map.getLayer('leonida-hillshade')) {
+            this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'none');
+          }
+          if (this.map.getLayer('leonida-buildings-3d')) {
+            this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'none');
+          }
+          if (this.map.getLayer('leonida-satellite-layer')) {
+            this.map.setLayoutProperty('leonida-satellite-layer', 'visibility', 'none');
+          }
+          if (this.map.getLayer('leonida-ocean-bg')) {
+            this.map.setPaintProperty('leonida-ocean-bg', 'background-color', layer.backgroundColor);
+          }
+          if (!this.map.getLayer(layer.id)) {
+            const beforeId = this.map.getLayer('leonida-route-line')
+              ? 'leonida-route-line'
+              : this.map.getLayer('leonida-clusters')
+                ? 'leonida-clusters'
+                : undefined;
+            this.map.addLayer(layer, beforeId);
+          }
+        });
+        this.ngZone.run(() => this.native3DActive.set(true));
+      },
+      { layerId: layer.id },
+      16,
+    );
+  }
+
+  private unmountNative3DLayer(): void {
+    if (this.native3DAbort) {
+      this.native3DAbort.abort();
+      this.native3DAbort = null;
+    }
+    this.ngZone.run(() => {
+      this.is3DLoading.set(false);
+      this.native3DActive.set(false);
+    });
+    if (!this.map || typeof this.map.getLayer !== 'function') {
+      return;
+    }
+    this.ngZone.runOutsideAngular(() => {
+      if (!this.map) {
+        return;
+      }
+      if (this.native3DLayer && this.map.getLayer(this.native3DLayer.id)) {
+        this.map.removeLayer(this.native3DLayer.id);
+      }
+      if (this.map.getLayer('leonida-satellite-layer')) {
+        this.map.setLayoutProperty('leonida-satellite-layer', 'visibility', 'visible');
+      }
+      if (this.map.getLayer('leonida-ocean-bg')) {
+        this.map.setPaintProperty(
+          'leonida-ocean-bg',
+          'background-color',
+          LEONIDA_MAP_CONFIG.styles.satellite.oceanColor,
+        );
       }
     });
   }
@@ -410,6 +595,7 @@ export class MapService {
   private searchPrefixIndex = new Map<string, LeonidaPoi[]>();
   private categoryIndex = new Map<string, LeonidaPoi[]>();
   private poiById = new Map<string, LeonidaPoi>();
+  private isolatedPoi: LeonidaPoi | null = null;
   readonly poisVersion = signal(0);
   readonly groupedPoisByCategory = signal<Array<{ category: string; items: LeonidaPoi[] }>>([]);
 
@@ -418,25 +604,38 @@ export class MapService {
   }
 
   filterPois(query: string, category: string): void {
-    this.currentQuery = query;
-    this.currentCategory = category;
+    this.telemetry.measure(
+      'map.filterPois',
+      () => {
+        this.isolatedPoi = null;
+        this.currentQuery = query;
+        this.currentCategory = category;
 
-    const normalized = normalizeSearchText(query.trim());
-    const filtered =
-      normalized.length > 0
-        ? this.searchPoisFast(normalized, category, Number.MAX_SAFE_INTEGER).filter(
-            (poi) => !poi.id.startsWith('__coord__:'),
-          )
-        : category === 'Todas'
-          ? this.allPois
-          : (this.categoryIndex.get(category) ?? []);
+        const normalized = normalizeSearchText(query.trim());
+        const filtered =
+          normalized.length > 0
+            ? this.searchPoisFast(normalized, category, Number.MAX_SAFE_INTEGER).filter(
+                (poi) => !poi.id.startsWith('__coord__:'),
+              )
+            : category === 'Todas'
+              ? this.allPois
+              : (this.categoryIndex.get(category) ?? []);
 
-    this.currentFilteredPois = filtered;
-    this.visiblePoisCount.set(filtered.length);
-    this.syncPoiCalloutData(true);
+        this.currentFilteredPois = filtered;
+        this.visiblePoisCount.set(filtered.length);
+        this.syncPoiCalloutData(true);
+      },
+      () => ({
+        queryLen: query.length,
+        category,
+        resultCount: this.currentFilteredPois.length,
+      }),
+      12,
+    );
   }
 
   isolatePoi(poi: LeonidaPoi): void {
+    this.isolatedPoi = poi;
     this.currentFilteredPois = [poi];
     this.visiblePoisCount.set(1);
     this.syncPoiCalloutData(true);
@@ -482,96 +681,134 @@ export class MapService {
       return;
     }
     const zoom = this.map.getZoom();
-    if (!force && zoom <= 4.2 && this.lastCalloutZoom <= 4.2 && this.lastCalloutZoom >= 0) {
+    if (!force && zoom <= 13.5 && this.lastCalloutZoom <= 13.5 && this.lastCalloutZoom >= 0) {
       return;
     }
     if (!force && Math.abs(zoom - this.lastCalloutZoom) < 0.5) {
       return;
     }
-    this.lastCalloutZoom = zoom;
-    const { geoJson, groupsByPoiId } = groupOverlappingPois(
-      this.currentFilteredPois,
-      zoom,
-      22,
-      this.selectedPoi()?.id,
+    this.telemetry.measure(
+      'map.syncPoiCalloutData',
+      () => {
+        this.lastCalloutZoom = zoom;
+        const { geoJson, groupsByPoiId } = this.telemetry.measure(
+          'map.groupOverlappingPois',
+          () =>
+            groupOverlappingPois(
+              this.currentFilteredPois,
+              zoom,
+              22,
+              this.selectedPoi()?.id,
+            ),
+          (res) => ({
+            zoom: Number(zoom.toFixed(2)),
+            inputPois: this.currentFilteredPois.length,
+            outputFeatures: res.geoJson.features.length,
+          }),
+          8,
+        );
+        const signature = geoJson.features
+          .map((f) => `${f.properties?.['id'] ?? ''}:${f.properties?.['stackCount'] ?? 1}`)
+          .join('|');
+        this.poiGroupsById = groupsByPoiId;
+        const activePoi = this.selectedPoi();
+        if (activePoi) {
+          this.coLocatedPois.set(groupsByPoiId.get(activePoi.id) ?? [activePoi]);
+        }
+        if (!force && signature === this.lastCalloutSignature) {
+          return;
+        }
+        this.lastCalloutSignature = signature;
+        for (const feature of geoJson.features) {
+          const count = feature.properties?.['stackCount'] as number | undefined;
+          const badgeIcon = feature.properties?.['stackBadgeIcon'] as string | undefined;
+          if (count && count > 1 && badgeIcon) {
+            this.ensureNumberBadgeImage(badgeIcon, String(count), '#F44E8F', '#FFF6F8', 8);
+          }
+        }
+        this.telemetry.measure(
+          'map.poisSourceSetData',
+          () => source.setData(geoJson),
+          { features: geoJson.features.length },
+          10,
+        );
+        setTimeout(() => this.syncPoiOverlayMarkers(), 0);
+      },
+      () => ({
+        force,
+        zoom: Number(zoom.toFixed(2)),
+        inputPois: this.currentFilteredPois.length,
+      }),
+      12,
     );
-    const signature = geoJson.features
-      .map((f) => `${f.properties?.['id'] ?? ''}:${f.properties?.['stackCount'] ?? 1}`)
-      .join('|');
-    this.poiGroupsById = groupsByPoiId;
-    const activePoi = this.selectedPoi();
-    if (activePoi) {
-      this.coLocatedPois.set(groupsByPoiId.get(activePoi.id) ?? [activePoi]);
-    }
-    if (!force && signature === this.lastCalloutSignature) {
-      return;
-    }
-    this.lastCalloutSignature = signature;
-    for (const feature of geoJson.features) {
-      const count = feature.properties?.['stackCount'] as number | undefined;
-      const badgeIcon = feature.properties?.['stackBadgeIcon'] as string | undefined;
-      if (count && count > 1 && badgeIcon) {
-        this.ensureNumberBadgeImage(badgeIcon, String(count), '#F44E8F', '#FFF6F8', 8);
-      }
-    }
-    source.setData(geoJson);
-    setTimeout(() => this.syncPoiOverlayMarkers(), 0);
   }
 
   searchPoisFast(query: string, category = 'Todas', limit = 24): LeonidaPoi[] {
     this.poisVersion();
-    const coord = parseCoordinateQuery(query);
-    if (coord && category !== 'Ocultos') {
-      const coordTarget: LeonidaPoi = {
-        id: `__coord__:${coord.lng.toFixed(4)},${coord.lat.toFixed(4)}`,
-        name: `Ir para ${coord.lng.toFixed(3)}, ${coord.lat.toFixed(3)}`,
-        category: 'Pontos-Chave',
-        region: 'Coordenadas exatas',
-        description: `Localização exata em ${coord.lng.toFixed(3)}, ${coord.lat.toFixed(3)}.`,
-        lng: coord.lng,
-        lat: coord.lat,
-      };
-      const pool = category === 'Todas' ? this.allPois : (this.categoryIndex.get(category) ?? []);
-      const nearest = [...pool]
-        .sort(
-          (a, b) =>
-            (a.lng - coord.lng) ** 2 +
-            (a.lat - coord.lat) ** 2 -
-            ((b.lng - coord.lng) ** 2 + (b.lat - coord.lat) ** 2),
-        )
-        .slice(0, Math.max(0, limit - 1));
-      return [coordTarget, ...nearest].slice(0, limit);
-    }
-
-    const tokens = normalizeSearchText(query.trim())
-      .split(/[\s,.\-_/]+/)
-      .filter(Boolean);
-    if (tokens.length === 0) {
-      return [];
-    }
-
-    const firstBucket = this.searchPrefixIndex.get(tokens[0]) ?? [];
-    if (firstBucket.length === 0) {
-      return [];
-    }
-
-    const results: LeonidaPoi[] = [];
-    for (const poi of firstBucket) {
-      if (category !== 'Todas' && poi.category !== category) {
-        continue;
-      }
-      if (tokens.length > 1) {
-        const haystack = normalizeSearchText(`${poi.name} ${poi.region} ${poi.category}`);
-        if (!tokens.every((t) => haystack.includes(t))) {
-          continue;
+    return this.telemetry.measure(
+      'map.searchPoisFast',
+      () => {
+        const coord = parseCoordinateQuery(query);
+        if (coord && category !== 'Ocultos') {
+          const coordTarget: LeonidaPoi = {
+            id: `__coord__:${coord.lng.toFixed(4)},${coord.lat.toFixed(4)}`,
+            name: `Ir para ${coord.lng.toFixed(3)}, ${coord.lat.toFixed(3)}`,
+            category: 'Pontos-Chave',
+            region: 'Coordenadas exatas',
+            description: `Localização exata em ${coord.lng.toFixed(3)}, ${coord.lat.toFixed(3)}.`,
+            lng: coord.lng,
+            lat: coord.lat,
+          };
+          const pool = category === 'Todas' ? this.allPois : (this.categoryIndex.get(category) ?? []);
+          const nearest = [...pool]
+            .sort(
+              (a, b) =>
+                (a.lng - coord.lng) ** 2 +
+                (a.lat - coord.lat) ** 2 -
+                ((b.lng - coord.lng) ** 2 + (b.lat - coord.lat) ** 2),
+            )
+            .slice(0, Math.max(0, limit - 1));
+          return [coordTarget, ...nearest].slice(0, limit);
         }
-      }
-      results.push(poi);
-      if (results.length >= limit) {
-        break;
-      }
-    }
-    return results;
+
+        const tokens = normalizeSearchText(query.trim())
+          .split(/[\s,.\-_/]+/)
+          .filter(Boolean);
+        if (tokens.length === 0) {
+          return [];
+        }
+
+        const firstBucket = this.searchPrefixIndex.get(tokens[0]) ?? [];
+        if (firstBucket.length === 0) {
+          return [];
+        }
+
+        const results: LeonidaPoi[] = [];
+        for (const poi of firstBucket) {
+          if (category !== 'Todas' && poi.category !== category) {
+            continue;
+          }
+          if (tokens.length > 1) {
+            const haystack = normalizeSearchText(`${poi.name} ${poi.region} ${poi.category}`);
+            if (!tokens.every((t) => haystack.includes(t))) {
+              continue;
+            }
+          }
+          results.push(poi);
+          if (results.length >= limit) {
+            break;
+          }
+        }
+        return results;
+      },
+      (results) => ({
+        queryLen: query.length,
+        category,
+        limit,
+        resultCount: results.length,
+      }),
+      8,
+    );
   }
 
   getPoisByCategory(category: string): LeonidaPoi[] {
@@ -624,8 +861,8 @@ export class MapService {
 
   flyToPoi(poi: LeonidaPoi, highlightBlink = false): void {
     const targetZoom = this.map
-      ? Math.min(this.map.getMaxZoom(), Math.max(this.map.getZoom(), 5.2))
-      : 5.2;
+      ? Math.min(this.map.getMaxZoom(), Math.max(this.map.getZoom(), 15.5))
+      : 15.5;
     this.map?.flyTo({
       center: [poi.lng, poi.lat],
       zoom: targetZoom,
@@ -663,91 +900,100 @@ export class MapService {
     if (!this.map) {
       return;
     }
+    this.telemetry.measure(
+      'map.syncRouteVisuals',
+      () => {
+        if (!this.map) {
+          return;
+        }
+        const route = this.routePois();
+        const stopFeatures = route.map((poi, index) => {
+          const step = index + 1;
+          const color = this.getRouteStepColor(step);
+          const badgeIcon = `route-badge-${step}-${color.replace('#', '')}`;
+          this.ensureNumberBadgeImage(badgeIcon, String(step), color, '#120B1E', 9);
+          return {
+            type: 'Feature' as const,
+            properties: {
+              id: poi.id,
+              step: String(step),
+              color,
+              badgeIcon,
+              iconKey: getPoiItemMeta(poi.category, poi.name).id,
+            },
+            geometry: {
+              type: 'Point' as const,
+              coordinates: [poi.lng, poi.lat] as [number, number],
+            },
+          };
+        });
 
-    const route = this.routePois();
-    const stopFeatures = route.map((poi, index) => {
-      const step = index + 1;
-      const color = this.getRouteStepColor(step);
-      const badgeIcon = `route-badge-${step}-${color.replace('#', '')}`;
-      this.ensureNumberBadgeImage(badgeIcon, String(step), color, '#120B1E', 9);
-      return {
-        type: 'Feature' as const,
-        properties: {
-          id: poi.id,
-          step: String(step),
-          color,
-          badgeIcon,
-          iconKey: getPoiItemMeta(poi.category, poi.name).id,
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [poi.lng, poi.lat] as [number, number],
-        },
-      };
-    });
+        if (this.focusPoi && !route.some((p) => p.id === this.focusPoi!.id)) {
+          stopFeatures.push({
+            type: 'Feature' as const,
+            properties: {
+              id: this.focusPoi.id,
+              step: '',
+              color: '#FFB458',
+              badgeIcon: '',
+              iconKey: getPoiItemMeta(this.focusPoi.category, this.focusPoi.name).id,
+            },
+            geometry: {
+              type: 'Point' as const,
+              coordinates: [this.focusPoi.lng, this.focusPoi.lat] as [number, number],
+            },
+          });
+        }
 
-    if (this.focusPoi && !route.some((p) => p.id === this.focusPoi!.id)) {
-      stopFeatures.push({
-        type: 'Feature' as const,
-        properties: {
-          id: this.focusPoi.id,
-          step: '',
-          color: '#FFB458',
-          badgeIcon: '',
-          iconKey: getPoiItemMeta(this.focusPoi.category, this.focusPoi.name).id,
-        },
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [this.focusPoi.lng, this.focusPoi.lat] as [number, number],
-        },
-      });
-    }
+        const stopsSource = this.map.getSource('leonida-route-stops') as GeoJSONSource | undefined;
+        stopsSource?.setData({
+          type: 'FeatureCollection',
+          features: stopFeatures,
+        });
 
-    const stopsSource = this.map.getSource('leonida-route-stops') as GeoJSONSource | undefined;
-    stopsSource?.setData({
-      type: 'FeatureCollection',
-      features: stopFeatures,
-    });
+        if (this.map.getLayer('leonida-pois-symbol')) {
+          const activeIds = stopFeatures.map((f) => f.properties.id);
+          this.map.setFilter(
+            'leonida-pois-symbol',
+            activeIds.length > 0
+              ? ['all', ['!', ['has', 'point_count']], ['!', ['in', ['get', 'id'], ['literal', activeIds]]]]
+              : ['!', ['has', 'point_count']],
+          );
+        }
 
-    if (this.map.getLayer('leonida-pois-symbol')) {
-      const activeIds = stopFeatures.map((f) => f.properties.id);
-      this.map.setFilter(
-        'leonida-pois-symbol',
-        activeIds.length > 0
-          ? ['all', ['!', ['has', 'point_count']], ['!', ['in', ['get', 'id'], ['literal', activeIds]]]]
-          : ['!', ['has', 'point_count']],
-      );
-    }
+        const routeSource = this.map.getSource('leonida-route') as GeoJSONSource | undefined;
+        routeSource?.setData({
+          type: 'FeatureCollection',
+          features:
+            route.length >= 2
+              ? [
+                  {
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                      type: 'LineString',
+                      coordinates: route.map((p) => [p.lng, p.lat]),
+                    },
+                  },
+                ]
+              : [],
+        });
 
-    const routeSource = this.map.getSource('leonida-route') as GeoJSONSource | undefined;
-    routeSource?.setData({
-      type: 'FeatureCollection',
-      features:
-        route.length >= 2
-          ? [
-              {
-                type: 'Feature',
-                properties: {},
-                geometry: {
-                  type: 'LineString',
-                  coordinates: route.map((p) => [p.lng, p.lat]),
-                },
-              },
-            ]
-          : [],
-    });
-
-    if (stopFeatures.length > 0) {
-      this.startRouteBlinkLoop();
-    } else {
-      if (this.routeBlinkTimer !== null) {
-        clearInterval(this.routeBlinkTimer);
-        this.routeBlinkTimer = null;
-      }
-      if (this.map.getLayer('leonida-route-blips')) {
-        this.map.setPaintProperty('leonida-route-blips', 'icon-opacity', 1);
-      }
-    }
+        if (stopFeatures.length > 0) {
+          this.startRouteBlinkLoop();
+        } else {
+          if (this.routeBlinkTimer !== null) {
+            clearInterval(this.routeBlinkTimer);
+            this.routeBlinkTimer = null;
+          }
+          if (this.map.getLayer('leonida-route-blips')) {
+            this.map.setPaintProperty('leonida-route-blips', 'icon-opacity', 1);
+          }
+        }
+      },
+      () => ({ stopsCount: this.routePois().length }),
+      8,
+    );
   }
 
   getFeaturedPois(limit = 8): LeonidaPoi[] {
@@ -756,49 +1002,60 @@ export class MapService {
   }
 
   private buildSearchIndex(pois: LeonidaPoi[]): void {
-    const index = new Map<string, LeonidaPoi[]>();
-    const catIndex = new Map<string, LeonidaPoi[]>();
-    const idMap = new Map<string, LeonidaPoi>();
+    this.telemetry.measure(
+      'map.buildSearchIndex',
+      () => {
+        const index = new Map<string, LeonidaPoi[]>();
+        const catIndex = new Map<string, LeonidaPoi[]>();
+        const idMap = new Map<string, LeonidaPoi>();
 
-    for (const poi of pois) {
-      idMap.set(poi.id, poi);
-      let catBucket = catIndex.get(poi.category);
-      if (!catBucket) {
-        catBucket = [];
-        catIndex.set(poi.category, catBucket);
-      }
-      catBucket.push(poi);
+        for (const poi of pois) {
+          idMap.set(poi.id, poi);
+          let catBucket = catIndex.get(poi.category);
+          if (!catBucket) {
+            catBucket = [];
+            catIndex.set(poi.category, catBucket);
+          }
+          catBucket.push(poi);
 
-      const seenPrefixes = new Set<string>();
-      const tokens = normalizeSearchText(`${poi.name} ${poi.region} ${poi.category}`)
-        .split(/[\s,.\-_/]+/)
-        .filter(Boolean);
-      for (const token of tokens) {
-        for (let len = 1; len <= token.length; len++) {
-          const prefix = token.slice(0, len);
-          if (seenPrefixes.has(prefix)) {
-            continue;
+          const seenPrefixes = new Set<string>();
+          const tokens = normalizeSearchText(`${poi.name} ${poi.region} ${poi.category}`)
+            .split(/[\s,.\-_/]+/)
+            .filter(Boolean);
+          for (const token of tokens) {
+            for (let len = 1; len <= token.length; len++) {
+              const prefix = token.slice(0, len);
+              if (seenPrefixes.has(prefix)) {
+                continue;
+              }
+              seenPrefixes.add(prefix);
+              let bucket = index.get(prefix);
+              if (!bucket) {
+                bucket = [];
+                index.set(prefix, bucket);
+              }
+              bucket.push(poi);
+            }
           }
-          seenPrefixes.add(prefix);
-          let bucket = index.get(prefix);
-          if (!bucket) {
-            bucket = [];
-            index.set(prefix, bucket);
-          }
-          bucket.push(poi);
         }
-      }
-    }
 
-    const grouped = Array.from(catIndex.entries())
-      .map(([category, items]) => ({ category, items }))
-      .sort((a, b) => b.items.length - a.items.length);
+        const grouped = Array.from(catIndex.entries())
+          .map(([category, items]) => ({ category, items }))
+          .sort((a, b) => b.items.length - a.items.length);
 
-    this.searchPrefixIndex = index;
-    this.categoryIndex = catIndex;
-    this.poiById = idMap;
-    this.groupedPoisByCategory.set(grouped);
-    this.poisVersion.update((v) => v + 1);
+        this.searchPrefixIndex = index;
+        this.categoryIndex = catIndex;
+        this.poiById = idMap;
+        this.groupedPoisByCategory.set(grouped);
+        this.poisVersion.update((v) => v + 1);
+      },
+      () => ({
+        poiCount: pois.length,
+        prefixKeys: this.searchPrefixIndex.size,
+        categories: this.categoryIndex.size,
+      }),
+      25,
+    );
   }
 
   private async loadLandmarks(apiUrl: string, fallbackUrl: string): Promise<void> {
@@ -806,71 +1063,148 @@ export class MapService {
       return;
     }
 
-    const data = (await this.fetchPoisFromUrl(apiUrl)) ?? (await this.fetchPoisFromUrl(fallbackUrl));
-    if (!data || data.length === 0) {
-      return;
-    }
+    await this.telemetry.measureAsync(
+      'map.loadLandmarks',
+      async () => {
+        const apiData = await this.fetchPoisFromUrl(apiUrl);
+        let data = apiData;
+        if (!apiData || apiData.length === 0) {
+          data = await this.fetchPoisFromUrl(fallbackUrl);
+        } else if (apiData.length >= 10) {
+          const staticData = await this.fetchPoisFromUrl(fallbackUrl);
+          if (staticData && staticData.length > 0) {
+            data = this.telemetry.measure(
+              'map.mergeLandmarks',
+              () => {
+                const seenIds = new Set(apiData.map((p) => p.id));
+                const seenNamesCoords = new Set(
+                  apiData.map(
+                    (p) => `${p.name.trim().toLowerCase()}|${p.lng.toFixed(3)}|${p.lat.toFixed(3)}`,
+                  ),
+                );
+                const extras = staticData.filter((p) => {
+                  if (seenIds.has(p.id)) {
+                    return false;
+                  }
+                  const sig = `${p.name.trim().toLowerCase()}|${p.lng.toFixed(3)}|${p.lat.toFixed(3)}`;
+                  return !seenNamesCoords.has(sig);
+                });
+                return [...apiData, ...extras];
+              },
+              (merged) => ({
+                apiCount: apiData.length,
+                staticCount: staticData.length,
+                mergedCount: merged.length,
+              }),
+              20,
+            );
+          }
+        }
+        if (!data || data.length === 0) {
+          return;
+        }
 
-    this.allPois = data;
-    const buildingsSource = this.map?.getSource('leonida-buildings') as GeoJSONSource | undefined;
-    buildingsSource?.setData(buildLeonida3DBuildings(data));
-    this.ngZone.run(() => {
-      this.buildSearchIndex(data);
-      this.totalPoisCount.set(data.length);
-      this.filterPois(this.currentQuery, this.currentCategory);
-    });
+        this.allPois = data;
+        const buildingsSource = this.map?.getSource('leonida-buildings') as GeoJSONSource | undefined;
+        if (buildingsSource) {
+          const buildingsFc = this.telemetry.measure(
+            'map.build3DBuildings',
+            () => buildLeonida3DBuildings(data),
+            (fc) => ({ inputPois: data.length, buildingsCount: fc.features.length }),
+            20,
+          );
+          buildingsSource.setData(buildingsFc);
+        }
+        this.ngZone.run(() => {
+          this.buildSearchIndex(data);
+          this.totalPoisCount.set(data.length);
+          if (this.isolatedPoi) {
+            this.isolatePoi(this.isolatedPoi);
+          } else {
+            this.filterPois(this.currentQuery, this.currentCategory);
+          }
+        });
+      },
+      () => ({ totalPois: this.allPois.length }),
+      250,
+    );
   }
 
   private async fetchPoisFromUrl(url: string): Promise<LeonidaPoi[] | null> {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        return null;
-      }
-      const payload = (await res.json()) as LeonidaPoi[] | { pois?: unknown[]; items?: unknown[]; data?: unknown[] };
-      const rawList = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload.pois)
-          ? payload.pois
-          : Array.isArray(payload.items)
-            ? payload.items
-            : Array.isArray(payload.data)
-              ? payload.data
-              : null;
+    return this.telemetry.measureAsync(
+      'map.fetchPoisFromUrl',
+      async () => {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            return null;
+          }
+          const payload = (await res.json()) as
+            | LeonidaPoi[]
+            | { pois?: unknown[]; items?: unknown[]; data?: unknown[] };
+          const rawList = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload.pois)
+              ? payload.pois
+              : Array.isArray(payload.items)
+                ? payload.items
+                : Array.isArray(payload.data)
+                  ? payload.data
+                  : null;
 
-      if (!rawList || rawList.length === 0) {
-        return null;
-      }
+          if (!rawList || rawList.length === 0) {
+            return null;
+          }
 
-      return rawList.map((item) => this.normalizePoi(item as Record<string, unknown>));
-    } catch {
-      return null;
-    }
+          return this.telemetry.measure(
+            'map.normalizePoisList',
+            () => rawList.map((item) => this.normalizePoi(item as Record<string, unknown>)),
+            (normalized) => ({ count: normalized.length }),
+            16,
+          );
+        } catch {
+          return null;
+        }
+      },
+      (list) => ({ url, count: list?.length ?? 0 }),
+      200,
+    );
   }
 
   private normalizePoi(raw: Record<string, unknown>): LeonidaPoi {
+    const [lng, lat] = normalizeToMapLngLat(
+      Number(raw['coord_x'] ?? raw['lng'] ?? 0),
+      Number(raw['coord_y'] ?? raw['lat'] ?? 0),
+    );
     return {
       id: String(raw['id'] ?? ''),
       name: String(raw['title'] ?? raw['name'] ?? ''),
       category: String(raw['category_name'] ?? raw['category'] ?? 'Pontos-Chave') as LeonidaPoi['category'],
       region: String(raw['region'] ?? 'Leonida'),
       description: String(raw['description'] ?? ''),
-      lng: Number(raw['coord_x'] ?? raw['lng'] ?? 0),
-      lat: Number(raw['coord_y'] ?? raw['lat'] ?? 0),
+      lng,
+      lat,
+      ...(raw['icon'] ? { icon: String(raw['icon']) } : {}),
     };
   }
 
   private add3DBuildingsLayer(map: MapLibreMap): void {
+    const buildingsFc = this.telemetry.measure(
+      'map.build3DBuildings',
+      () => buildLeonida3DBuildings(this.allPois),
+      (fc) => ({ inputPois: this.allPois.length, buildingsCount: fc.features.length }),
+      20,
+    );
     map.addSource('leonida-buildings', {
       type: 'geojson',
-      data: buildLeonida3DBuildings(this.allPois),
+      data: buildingsFc,
     });
 
     map.addLayer({
       id: 'leonida-buildings-3d',
       type: 'fill-extrusion',
       source: 'leonida-buildings',
-      minzoom: 3.6,
+      minzoom: 13,
       layout: { visibility: this.is3DMode() ? 'visible' : 'none' },
       paint: {
         'fill-extrusion-color': ['get', 'color'],
@@ -887,36 +1221,42 @@ export class MapService {
       return;
     }
 
-    await Promise.all(
-      ALL_POI_BLIPS.map(
-        (blip) =>
-          new Promise<void>((resolve) => {
-            const imageId = `poi-blip-${blip.id}`;
-            if (map.hasImage(imageId)) {
-              resolve();
-              return;
-            }
-            const iconPx = 96;
-            const img = new Image(iconPx, iconPx);
-            img.onload = () => {
-              try {
-                const canvas = document.createElement('canvas');
-                canvas.width = iconPx;
-                canvas.height = iconPx;
-                const ctx = canvas.getContext('2d');
-                if (ctx && !map.hasImage(imageId)) {
-                  ctx.imageSmoothingEnabled = true;
-                  ctx.imageSmoothingQuality = 'high';
-                  ctx.drawImage(img, 0, 0, iconPx, iconPx);
-                  map.addImage(imageId, ctx.getImageData(0, 0, iconPx, iconPx), { pixelRatio: 3.5 });
+    await this.telemetry.measureAsync(
+      'map.registerPoiBlipImages',
+      () =>
+        Promise.all(
+          ALL_POI_BLIPS.map(
+            (blip) =>
+              new Promise<void>((resolve) => {
+                const imageId = `poi-blip-${blip.id}`;
+                if (map.hasImage(imageId)) {
+                  resolve();
+                  return;
                 }
-              } catch {}
-              resolve();
-            };
-            img.onerror = () => resolve();
-            img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildMapBlipSvg(blip, iconPx))}`;
-          }),
-      ),
+                const iconPx = 96;
+                const img = new Image(iconPx, iconPx);
+                img.onload = () => {
+                  try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = iconPx;
+                    canvas.height = iconPx;
+                    const ctx = canvas.getContext('2d');
+                    if (ctx && !map.hasImage(imageId)) {
+                      ctx.imageSmoothingEnabled = true;
+                      ctx.imageSmoothingQuality = 'high';
+                      ctx.drawImage(img, 0, 0, iconPx, iconPx);
+                      map.addImage(imageId, ctx.getImageData(0, 0, iconPx, iconPx), { pixelRatio: 3.5 });
+                    }
+                  } catch {}
+                  resolve();
+                };
+                img.onerror = () => resolve();
+                img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildMapBlipSvg(blip, iconPx))}`;
+              }),
+          ),
+        ),
+      { blipCount: ALL_POI_BLIPS.length },
+      300,
     );
   }
 
@@ -949,7 +1289,7 @@ export class MapService {
       source: 'leonida-route-stops',
       layout: {
         'icon-image': ['concat', 'poi-blip-', ['get', 'iconKey']],
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 1.5, 0.56, 3.5, 0.84, 5.5, 1.05],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.56, 14, 0.84, 17, 1.05],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
       },
@@ -971,12 +1311,18 @@ export class MapService {
       },
     });
 
+    const initialPoisGeoJson = this.telemetry.measure(
+      'map.poisToGeoJson',
+      () => poisToGeoJson(this.allPois),
+      (fc) => ({ count: fc.features.length }),
+      16,
+    );
     map.addSource('leonida-pois', {
       type: 'geojson',
-      data: poisToGeoJson(this.allPois),
+      data: initialPoisGeoJson,
       cluster: true,
-      clusterMaxZoom: 4,
-      clusterRadius: 34,
+      clusterMaxZoom: 14,
+      clusterRadius: 40,
     });
 
     map.addLayer({
@@ -1025,22 +1371,13 @@ export class MapService {
       filter: ['!', ['has', 'point_count']],
       layout: {
         'icon-image': ['concat', 'poi-blip-', ['get', 'iconKey']],
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 1.5, 0.56, 3.5, 0.84, 5.5, 1.05],
+        'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.56, 14, 0.84, 17, 1.05],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
         'icon-padding': 2,
-        'text-field': ['step', ['zoom'], '', 3.5, ['get', 'name']],
-        'text-size': 11,
-        'text-anchor': 'top',
-        'text-offset': [0, 1.35],
-        'text-max-width': 11,
-        'text-optional': true,
       },
       paint: {
         'icon-opacity': 0,
-        'text-color': '#FFF6F8',
-        'text-halo-color': '#120B1E',
-        'text-halo-width': 1.8,
       },
     });
 
@@ -1209,14 +1546,14 @@ export class MapService {
         this.map.setPitch(nextPitch);
         if (nextPitch > 8 && !this.is3DMode()) {
           this.ngZone.run(() => this.is3DMode.set(true));
-          this.map.setTerrain({ source: 'leonida-dem', exaggeration: 4 });
-          this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'visible');
-          this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'visible');
+          if (!this.native3DActive()) {
+            this.apply3DFallbackState(true);
+          }
+          void this.activateNative3DLayer();
         } else if (nextPitch <= 1 && this.is3DMode()) {
           this.ngZone.run(() => this.is3DMode.set(false));
-          this.map.setTerrain(null);
-          this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'none');
-          this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'none');
+          this.unmountNative3DLayer();
+          this.apply3DFallbackState(false);
         }
       }
     });
@@ -1310,46 +1647,56 @@ export class MapService {
     if (!this.map) {
       return [];
     }
-    const rect = this.map.getCanvas().getBoundingClientRect();
-    const targets: { x: number; y: number; type: 'poi' | 'pin'; id: string }[] = [];
-    const seenIds = new Set<string>();
+    return this.telemetry.measure(
+      'map.getVisibleMapTargets',
+      () => {
+        if (!this.map) {
+          return [];
+        }
+        const rect = this.map.getCanvas().getBoundingClientRect();
+        const targets: { x: number; y: number; type: 'poi' | 'pin'; id: string }[] = [];
+        const seenIds = new Set<string>();
 
-    for (const [id, marker] of this.customPinMarkers.entries()) {
-      const lngLat = marker.getLngLat();
-      const pt = this.map.project(lngLat);
-      const x = rect.left + pt.x;
-      const y = rect.top + pt.y;
-      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-        targets.push({ x, y, type: 'pin', id });
-      }
-    }
+        for (const [id, marker] of this.customPinMarkers.entries()) {
+          const lngLat = marker.getLngLat();
+          const pt = this.map.project(lngLat);
+          const x = rect.left + pt.x;
+          const y = rect.top + pt.y;
+          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+            targets.push({ x, y, type: 'pin', id });
+          }
+        }
 
-    const poiLayers = ['leonida-route-blips', 'leonida-pois-symbol'].filter((id) =>
-      Boolean(this.map?.getLayer(id)),
+        const poiLayers = ['leonida-route-blips', 'leonida-pois-symbol'].filter((id) =>
+          Boolean(this.map?.getLayer(id)),
+        );
+        if (poiLayers.length > 0) {
+          const features = this.map.queryRenderedFeatures({ layers: poiLayers });
+          for (const feature of features) {
+            const id = feature.properties?.['id'] as string | undefined;
+            if (!id || seenIds.has(id)) {
+              continue;
+            }
+            seenIds.add(id);
+            const geometry = feature.geometry as { coordinates?: [number, number] } | undefined;
+            const coords = geometry?.coordinates;
+            if (!coords) {
+              continue;
+            }
+            const pt = this.map.project(coords);
+            const x = rect.left + pt.x;
+            const y = rect.top + pt.y;
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+              targets.push({ x, y, type: 'poi', id });
+            }
+          }
+        }
+
+        return targets;
+      },
+      (targets) => ({ targetCount: targets.length }),
+      8,
     );
-    if (poiLayers.length > 0) {
-      const features = this.map.queryRenderedFeatures({ layers: poiLayers });
-      for (const feature of features) {
-        const id = feature.properties?.['id'] as string | undefined;
-        if (!id || seenIds.has(id)) {
-          continue;
-        }
-        seenIds.add(id);
-        const geometry = feature.geometry as { coordinates?: [number, number] } | undefined;
-        const coords = geometry?.coordinates;
-        if (!coords) {
-          continue;
-        }
-        const pt = this.map.project(coords);
-        const x = rect.left + pt.x;
-        const y = rect.top + pt.y;
-        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-          targets.push({ x, y, type: 'poi', id });
-        }
-      }
-    }
-
-    return targets;
   }
 
   handleScreenClick(clientX: number, clientY: number): void {
@@ -1357,86 +1704,96 @@ export class MapService {
       return;
     }
 
-    const targetEl =
-      typeof document !== 'undefined'
-        ? (document.elementFromPoint(clientX, clientY) as HTMLElement | null)
-        : null;
-    const markerEl = targetEl?.closest('.maplibregl-marker');
-    if (markerEl) {
-      for (const marker of this.customPinMarkers.values()) {
-        if (marker.getElement() === markerEl) {
-          marker.togglePopup();
+    this.telemetry.measure(
+      'map.handleScreenClick',
+      () => {
+        if (!this.map) {
           return;
         }
-      }
-    }
+        const targetEl =
+          typeof document !== 'undefined'
+            ? (document.elementFromPoint(clientX, clientY) as HTMLElement | null)
+            : null;
+        const markerEl = targetEl?.closest('.maplibregl-marker');
+        if (markerEl) {
+          for (const marker of this.customPinMarkers.values()) {
+            if (marker.getElement() === markerEl) {
+              marker.togglePopup();
+              return;
+            }
+          }
+        }
 
-    const canvas = this.map.getCanvas();
-    const rect = canvas.getBoundingClientRect();
-    const point: [number, number] = [clientX - rect.left, clientY - rect.top];
-    const queryBox: [[number, number], [number, number]] = [
-      [point[0] - 16, point[1] - 16],
-      [point[0] + 16, point[1] + 16],
-    ];
+        const canvas = this.map.getCanvas();
+        const rect = canvas.getBoundingClientRect();
+        const point: [number, number] = [clientX - rect.left, clientY - rect.top];
+        const queryBox: [[number, number], [number, number]] = [
+          [point[0] - 16, point[1] - 16],
+          [point[0] + 16, point[1] + 16],
+        ];
 
-    const poiLayers = ['leonida-route-blips', 'leonida-pois-symbol'].filter((id) =>
-      Boolean(this.map?.getLayer(id)),
+        const poiLayers = ['leonida-route-blips', 'leonida-pois-symbol'].filter((id) =>
+          Boolean(this.map?.getLayer(id)),
+        );
+        if (poiLayers.length > 0) {
+          const poiHits = this.map.queryRenderedFeatures(queryBox, { layers: poiLayers });
+          const id = poiHits[0]?.properties?.['id'] as string | undefined;
+          const found = this.allPois.find((p) => p.id === id) ?? null;
+          if (found) {
+            this.ngZone.run(() => this.selectPoi(found));
+            return;
+          }
+        }
+
+        // Fallback: match nearest visible POI icon within 24px of cursor
+        let nearestPoiId: string | null = null;
+        let nearestDistSq = 24 * 24;
+        for (const target of this.getVisibleMapTargets()) {
+          if (target.type !== 'poi') {
+            continue;
+          }
+          const dx = target.x - clientX;
+          const dy = target.y - clientY;
+          const distSq = dx * dx + dy * dy;
+          if (distSq <= nearestDistSq) {
+            nearestDistSq = distSq;
+            nearestPoiId = target.id;
+          }
+        }
+        if (nearestPoiId) {
+          const found = this.allPois.find((p) => p.id === nearestPoiId) ?? null;
+          if (found) {
+            this.ngZone.run(() => this.selectPoi(found));
+            return;
+          }
+        }
+
+        if (this.map.getLayer('leonida-clusters')) {
+          const clusterHits = this.map.queryRenderedFeatures(queryBox, {
+            layers: ['leonida-clusters'],
+          });
+          const feature = clusterHits[0];
+          const clusterId = feature?.properties?.['cluster_id'] as number | undefined;
+          const source = this.map.getSource('leonida-pois') as GeoJSONSource | undefined;
+          const geometry = feature?.geometry as { coordinates?: [number, number] } | undefined;
+          if (clusterId !== undefined && source && geometry?.coordinates) {
+            void source.getClusterExpansionZoom(clusterId).then((zoom) => {
+              this.map?.easeTo({ center: geometry.coordinates!, zoom, duration: 360 });
+            });
+            return;
+          }
+        }
+
+        if (this.isPinMode()) {
+          const lngLat = this.map.unproject(point);
+          this.ngZone.run(() => {
+            this.addCustomPin(lngLat.lng, lngLat.lat);
+          });
+        }
+      },
+      { clientX: Math.round(clientX), clientY: Math.round(clientY) },
+      8,
     );
-    if (poiLayers.length > 0) {
-      const poiHits = this.map.queryRenderedFeatures(queryBox, { layers: poiLayers });
-      const id = poiHits[0]?.properties?.['id'] as string | undefined;
-      const found = this.allPois.find((p) => p.id === id) ?? null;
-      if (found) {
-        this.ngZone.run(() => this.selectPoi(found));
-        return;
-      }
-    }
-
-    // Fallback: match nearest visible POI icon within 24px of cursor
-    let nearestPoiId: string | null = null;
-    let nearestDistSq = 24 * 24;
-    for (const target of this.getVisibleMapTargets()) {
-      if (target.type !== 'poi') {
-        continue;
-      }
-      const dx = target.x - clientX;
-      const dy = target.y - clientY;
-      const distSq = dx * dx + dy * dy;
-      if (distSq <= nearestDistSq) {
-        nearestDistSq = distSq;
-        nearestPoiId = target.id;
-      }
-    }
-    if (nearestPoiId) {
-      const found = this.allPois.find((p) => p.id === nearestPoiId) ?? null;
-      if (found) {
-        this.ngZone.run(() => this.selectPoi(found));
-        return;
-      }
-    }
-
-    if (this.map.getLayer('leonida-clusters')) {
-      const clusterHits = this.map.queryRenderedFeatures(queryBox, {
-        layers: ['leonida-clusters'],
-      });
-      const feature = clusterHits[0];
-      const clusterId = feature?.properties?.['cluster_id'] as number | undefined;
-      const source = this.map.getSource('leonida-pois') as GeoJSONSource | undefined;
-      const geometry = feature?.geometry as { coordinates?: [number, number] } | undefined;
-      if (clusterId !== undefined && source && geometry?.coordinates) {
-        void source.getClusterExpansionZoom(clusterId).then((zoom) => {
-          this.map?.easeTo({ center: geometry.coordinates!, zoom, duration: 360 });
-        });
-        return;
-      }
-    }
-
-    if (this.isPinMode()) {
-      const lngLat = this.map.unproject(point);
-      this.ngZone.run(() => {
-        this.addCustomPin(lngLat.lng, lngLat.lat);
-      });
-    }
   }
 
   private renderSavedCustomPins(): void {
@@ -1446,8 +1803,8 @@ export class MapService {
   }
 
   private getPinSizeForZoom(): number {
-    const zoom = this.map?.getZoom() ?? 2.5;
-    return Math.round(Math.max(16, Math.min(32, 12 + zoom * 3.5)));
+    const zoom = this.map?.getZoom() ?? LEONIDA_MAP_CONFIG.initialZoom;
+    return Math.round(Math.max(16, Math.min(34, 16 + (zoom - 9.5) * 2.4)));
   }
 
   private syncCustomPinSizes(): void {
@@ -1459,14 +1816,21 @@ export class MapService {
     if (size === this.lastPinSize) {
       return;
     }
-    this.lastPinSize = size;
-    const fontSize = `${Math.round(size * 0.52)}px`;
-    for (const marker of this.customPinMarkers.values()) {
-      const el = marker.getElement();
-      el.style.width = `${size}px`;
-      el.style.height = `${size}px`;
-      el.style.fontSize = fontSize;
-    }
+    this.telemetry.measure(
+      'map.syncCustomPinSizes',
+      () => {
+        this.lastPinSize = size;
+        const fontSize = `${Math.round(size * 0.52)}px`;
+        for (const marker of this.customPinMarkers.values()) {
+          const el = marker.getElement();
+          el.style.width = `${size}px`;
+          el.style.height = `${size}px`;
+          el.style.fontSize = fontSize;
+        }
+      },
+      () => ({ customPins: this.customPinMarkers.size }),
+      4,
+    );
   }
 
   private ensurePoiOverlay(): HTMLElement | null {
@@ -1490,30 +1854,47 @@ export class MapService {
     if (size === this.lastPoiOverlaySize) {
       return;
     }
-    this.lastPoiOverlaySize = size;
-    for (const entry of this.poiMarkerNodes.values()) {
-      entry.el.style.width = `${size}px`;
-      entry.el.style.height = `${size}px`;
-    }
+    this.telemetry.measure(
+      'map.syncPoiOverlaySizes',
+      () => {
+        this.lastPoiOverlaySize = size;
+        for (const entry of this.poiMarkerNodes.values()) {
+          entry.el.style.width = `${size}px`;
+          entry.el.style.height = `${size}px`;
+        }
+      },
+      () => ({ domNodes: this.poiMarkerNodes.size }),
+      4,
+    );
   }
 
   private repositionPoiOverlayMarkers(): void {
     if (!this.map || this.poiMarkerNodes.size === 0 || typeof this.map.project !== 'function') {
       return;
     }
-    const size = this.getPinSizeForZoom();
-    const sizeChanged = size !== this.lastPoiOverlaySize;
-    if (sizeChanged) {
-      this.lastPoiOverlaySize = size;
-    }
-    for (const entry of this.poiMarkerNodes.values()) {
-      const pt = this.map.project([entry.lng, entry.lat]);
-      entry.el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
-      if (sizeChanged) {
-        entry.el.style.width = `${size}px`;
-        entry.el.style.height = `${size}px`;
-      }
-    }
+    this.telemetry.measure(
+      'map.repositionPoiOverlayMarkers',
+      () => {
+        if (!this.map) {
+          return;
+        }
+        const size = this.getPinSizeForZoom();
+        const sizeChanged = size !== this.lastPoiOverlaySize;
+        if (sizeChanged) {
+          this.lastPoiOverlaySize = size;
+        }
+        for (const entry of this.poiMarkerNodes.values()) {
+          const pt = this.map.project([entry.lng, entry.lat]);
+          entry.el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
+          if (sizeChanged) {
+            entry.el.style.width = `${size}px`;
+            entry.el.style.height = `${size}px`;
+          }
+        }
+      },
+      () => ({ domNodes: this.poiMarkerNodes.size }),
+      4,
+    );
   }
 
   private syncPoiOverlayMarkers(): void {
@@ -1529,81 +1910,126 @@ export class MapService {
       return;
     }
 
-    const rendered = this.map.queryRenderedFeatures({ layers: ['leonida-pois-symbol'] });
-    const seen = new Set<string>();
-    const size = this.getPinSizeForZoom();
-    this.lastPoiOverlaySize = size;
-
-    for (const feature of rendered) {
-      const id = String(feature.properties?.['id'] ?? '');
-      if (!id || seen.has(id)) {
-        continue;
-      }
-      const coords =
-        feature.geometry.type === 'Point'
-          ? (feature.geometry.coordinates as [number, number])
-          : null;
-      if (!coords) {
-        continue;
-      }
-      seen.add(id);
-
-      const iconKey = String(feature.properties?.['iconKey'] ?? 'landmark') as PoiBlipId;
-      const stackCount = Number(feature.properties?.['stackCount'] ?? 1);
-      const name = String(feature.properties?.['name'] ?? '');
-      const existing = this.poiMarkerNodes.get(id);
-      const pt = this.map.project(coords);
-
-      if (existing) {
-        existing.lng = coords[0];
-        existing.lat = coords[1];
-        existing.el.style.width = `${size}px`;
-        existing.el.style.height = `${size}px`;
-        existing.el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
-        if (existing.iconKey !== iconKey || existing.stackCount !== stackCount) {
-          existing.iconKey = iconKey;
-          existing.stackCount = stackCount;
-          this.renderPoiMarkerContent(existing.el, iconKey, stackCount);
+    this.telemetry.measure(
+      'map.syncPoiOverlayMarkers',
+      () => {
+        if (!this.map) {
+          return;
         }
-        continue;
-      }
+        const rendered = this.telemetry.measure(
+          'map.queryRenderedPois',
+          () => this.map!.queryRenderedFeatures({ layers: ['leonida-pois-symbol'] }),
+          (list) => ({ renderedCount: list.length }),
+          6,
+        );
+        this.telemetry.measure(
+          'map.reconcilePoiDom',
+          () => {
+            const seen = new Set<string>();
+            const size = this.getPinSizeForZoom();
+            this.lastPoiOverlaySize = size;
 
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = 'leonida-poi-marker';
-      el.setAttribute('aria-label', name || id);
-      el.style.width = `${size}px`;
-      el.style.height = `${size}px`;
-      el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
-      this.renderPoiMarkerContent(el, iconKey, stackCount);
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.ngZone.run(() => {
-          const found = this.allPois.find((p) => p.id === id) ?? null;
-          if (found) {
-            this.selectPoi(found);
-          }
-        });
-      });
+            for (const feature of rendered) {
+              const id = String(feature.properties?.['id'] ?? '');
+              if (!id || seen.has(id)) {
+                continue;
+              }
+              const coords =
+                feature.geometry.type === 'Point'
+                  ? (feature.geometry.coordinates as [number, number])
+                  : null;
+              if (!coords) {
+                continue;
+              }
+              seen.add(id);
 
-      overlay.appendChild(el);
-      this.poiMarkerNodes.set(id, { el, iconKey, stackCount, lng: coords[0], lat: coords[1] });
-    }
+              const iconKey = String(feature.properties?.['iconKey'] ?? 'landmark') as PoiBlipId;
+              const iconName = String(feature.properties?.['icon'] ?? '');
+              const stackCount = Number(feature.properties?.['stackCount'] ?? 1);
+              const name = String(feature.properties?.['name'] ?? '');
+              const existing = this.poiMarkerNodes.get(id);
+              const pt = this.map!.project(coords);
 
-    for (const [id, entry] of this.poiMarkerNodes.entries()) {
-      if (!seen.has(id)) {
-        entry.el.remove();
-        this.poiMarkerNodes.delete(id);
-      }
-    }
+              if (existing) {
+                existing.lng = coords[0];
+                existing.lat = coords[1];
+                existing.el.style.width = `${size}px`;
+                existing.el.style.height = `${size}px`;
+                existing.el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
+                if (
+                  existing.iconKey !== iconKey ||
+                  existing.iconName !== iconName ||
+                  existing.stackCount !== stackCount
+                ) {
+                  existing.iconKey = iconKey;
+                  existing.iconName = iconName;
+                  existing.stackCount = stackCount;
+                  this.renderPoiMarkerContent(existing.el, iconKey, stackCount, iconName);
+                }
+                continue;
+              }
+
+              const el = document.createElement('button');
+              el.type = 'button';
+              el.className = 'leonida-poi-marker';
+              el.setAttribute('aria-label', name || id);
+              el.style.width = `${size}px`;
+              el.style.height = `${size}px`;
+              el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
+              this.renderPoiMarkerContent(el, iconKey, stackCount, iconName);
+              el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.ngZone.run(() => {
+                  const found = this.allPois.find((p) => p.id === id) ?? null;
+                  if (found) {
+                    this.selectPoi(found);
+                  }
+                });
+              });
+
+              overlay.appendChild(el);
+              this.poiMarkerNodes.set(id, {
+                el,
+                iconKey,
+                iconName,
+                stackCount,
+                lng: coords[0],
+                lat: coords[1],
+              });
+            }
+
+            for (const [id, entry] of this.poiMarkerNodes.entries()) {
+              if (!seen.has(id)) {
+                entry.el.remove();
+                this.poiMarkerNodes.delete(id);
+              }
+            }
+          },
+          () => ({ domNodes: this.poiMarkerNodes.size }),
+          6,
+        );
+      },
+      () => ({ domNodes: this.poiMarkerNodes.size }),
+      8,
+    );
   }
 
-  private renderPoiMarkerContent(el: HTMLButtonElement, iconKey: PoiBlipId, stackCount: number): void {
+  private renderPoiMarkerContent(
+    el: HTMLButtonElement,
+    iconKey: PoiBlipId,
+    stackCount: number,
+    iconName = '',
+  ): void {
     const meta = POI_BLIP_CATALOG[iconKey] ?? POI_BLIP_CATALOG.landmark;
     el.style.borderColor = meta.color;
-    const inner = renderLucideIconElements(meta.icon);
+    const pngUrl = getPoiIconUrl(iconName);
     const stackHtml =
       stackCount > 1 ? `<span class="leonida-poi-stack-pill">${stackCount}</span>` : '';
+    if (pngUrl) {
+      el.innerHTML = `<img class="leonida-poi-png" src="${pngUrl}" alt="" decoding="async" loading="lazy" />${stackHtml}`;
+      return;
+    }
+    const inner = renderLucideIconElements(meta.icon);
     el.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#FFF6F8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true">${inner}</svg>${stackHtml}`;
   }
 
@@ -1675,7 +2101,8 @@ export class MapService {
     }
     this.ngZone.runOutsideAngular(() => {
       const current = this.map?.getZoom() ?? LEONIDA_MAP_CONFIG.initialZoom;
-      this.map?.easeTo({ zoom: Math.max(0.5, Math.min(7, current + delta)), duration: 180 });
+      const maxZoom = this.map?.getMaxZoom() ?? LEONIDA_MAP_CONFIG.hdMaxZoom;
+      this.map?.easeTo({ zoom: Math.max(8.5, Math.min(maxZoom, current + delta)), duration: 180 });
     });
   }
 
@@ -1685,7 +2112,8 @@ export class MapService {
     }
     this.ngZone.runOutsideAngular(() => {
       const current = this.map?.getZoom() ?? LEONIDA_MAP_CONFIG.initialZoom;
-      this.map?.setZoom(Math.max(0.5, Math.min(7, current + delta)));
+      const maxZoom = this.map?.getMaxZoom() ?? LEONIDA_MAP_CONFIG.hdMaxZoom;
+      this.map?.setZoom(Math.max(8.5, Math.min(maxZoom, current + delta)));
     });
   }
 
@@ -1747,6 +2175,12 @@ export class MapService {
                 zoom: Number((this.map?.getZoom() ?? 0).toFixed(2)),
                 isMoving: this.isMapMoving,
                 visiblePois: this.visiblePoisCount(),
+                topSlowMethods: this.telemetry.getSlowestMethods(3).map((m) => ({
+                  name: m.name,
+                  maxMs: m.maxMs,
+                  p95Ms: m.p95Ms,
+                  count: m.count,
+                })),
               }
             : undefined;
 
@@ -1783,6 +2217,11 @@ export class MapService {
   }
 
   destroy(): void {
+    this.unmountNative3DLayer();
+    if (this.native3DLayer) {
+      this.native3DLayer.dispose();
+      this.native3DLayer = null;
+    }
     if (this.routeBlinkTimer !== null) {
       clearInterval(this.routeBlinkTimer);
       this.routeBlinkTimer = null;

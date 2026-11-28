@@ -32,5 +32,7 @@ export class Map {
   getPitch = (): number => 0;
   getBearing = (): number => 0;
   getSource = (): undefined => undefined;
+  getLayer = (): undefined => undefined;
+  removeLayer = (): void => {};
   remove = (): void => {};
 }

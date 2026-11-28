@@ -41,7 +41,7 @@ export function groupOverlappingPois(
     };
   }
 
-  if (zoom <= 4.2) {
+  if (zoom <= 13.5) {
     for (const poi of pois) {
       groupsByPoiId.set(poi.id, [poi]);
     }
@@ -126,6 +126,7 @@ function toStackedFeature(poi: LeonidaPoi, stackCount: number) {
       name: poi.name,
       category: poi.category,
       region: poi.region,
+      icon: poi.icon ?? '',
       iconKey: getPoiItemMeta(poi.category, poi.name).id,
       stackCount,
       stackLabel: stackCount > 1 ? String(stackCount) : '',
