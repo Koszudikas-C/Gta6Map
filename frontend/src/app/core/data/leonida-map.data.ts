@@ -1,3 +1,5 @@
+import { getPoiItemMeta } from './poi-category-icons';
+
 export type MapQualityMode = 'light' | 'hd';
 
 export type PoiCategory =
@@ -108,6 +110,7 @@ export function poisToGeoJson(pois: LeonidaPoi[]): GeoJsonFeatureCollection<GeoJ
         id: poi.id,
         name: poi.name,
         category: poi.category,
+        iconKey: getPoiItemMeta(poi.category, poi.name).id,
         region: poi.region,
         description: poi.description,
       },

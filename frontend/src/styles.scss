@@ -55,6 +55,33 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+@keyframes gamepadFocusPulse {
+  0%,
+  100% {
+    outline-color: rgba(244, 78, 143, 0.95);
+    box-shadow: 0 0 0 1px rgba(244, 78, 143, 0.35);
+  }
+  50% {
+    outline-color: rgba(255, 166, 107, 0.55);
+    box-shadow: 0 0 0 2px rgba(255, 166, 107, 0.14);
+  }
+}
+
+.hud-shell button:focus-visible,
+.hud-shell input:focus-visible,
+.hud-shell select:focus-visible,
+.hud-shell textarea:focus-visible,
+.hud-shell a:focus-visible,
+.maplibregl-popup button:focus-visible,
+.maplibregl-popup input:focus-visible,
+.maplibregl-popup textarea:focus-visible,
+.hud-shell .gamepad-focus,
+.maplibregl-popup .gamepad-focus {
+  outline: 2px solid var(--vice-magenta);
+  outline-offset: -1px;
+  animation: gamepadFocusPulse 1.35s ease-in-out infinite;
+}
+
 .font-display {
   font-family: var(--font-display);
   font-weight: 800;
@@ -107,4 +134,50 @@ a,
 [role='button'],
 .hud-shell * {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23F44E8F' stroke-width='1.75' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 2v4M12 18v4M2 12h4M18 12h4'/%3E%3Ccircle cx='12' cy='12' r='1.5' fill='%23FFA66B' stroke='none'/%3E%3C/svg%3E") 12 12, crosshair !important;
+}
+
+.poi-focus-beacon {
+  pointer-events: none;
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.poi-focus-frame {
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2.5px solid var(--beacon-color, #ffb458);
+  box-shadow: 0 0 12px var(--beacon-color, #f44e8f);
+  animation: poiFrameBlink 0.6s ease-in-out infinite alternate;
+}
+
+.poi-route-step {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--beacon-color, #ffb458);
+  color: #120b1e;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+@keyframes poiFrameBlink {
+  0% {
+    opacity: 0.25;
+  }
+  100% {
+    opacity: 1;
+  }
 }

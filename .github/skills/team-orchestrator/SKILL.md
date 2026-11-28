@@ -30,6 +30,7 @@ Esta skill descreve o procedimento operacional padrão para o Agente Gerente orq
 
 3. **Avaliação do Gerente (Gate de DoD):**
    - Analisar o relatório do sub-agente.
+   - **Regra Obrigatória de Testes (Bug & Feature)**: Exigir que toda correção de bug e toda nova funcionalidade entregue **testes unitários + testes E2E (Playwright)** novos ou atualizados para evitar regressões, além de executar build + unit + E2E antes de encerrar.
    - Garantir que os 3 pilares do DoD (Testes, Validação estática/segurança, Documentação) foram cumpridos antes de avançar para a próxima fase.
    - Se houver dúvida impeditiva de negócio, consolidar e perguntar ao usuário.
 

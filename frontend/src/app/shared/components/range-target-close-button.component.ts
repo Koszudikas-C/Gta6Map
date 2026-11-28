@@ -6,6 +6,8 @@ interface BulletHole {
   y: number;
 }
 
+const globalBulletHoles = signal<BulletHole[]>([]);
+
 @Component({
   selector: 'app-range-target-close',
   standalone: true,
@@ -75,7 +77,7 @@ export class RangeTargetCloseButtonComponent {
   @Input() ariaLabel = 'Atirar no alvo para fechar';
   @Output() close = new EventEmitter<void>();
 
-  readonly holes = signal<BulletHole[]>([]);
+  readonly holes = globalBulletHoles;
   readonly isHit = signal(false);
 
   onShoot(event: MouseEvent): void {
@@ -93,6 +95,6 @@ export class RangeTargetCloseButtonComponent {
     setTimeout(() => {
       this.isHit.set(false);
       this.close.emit();
-    }, 110);
+    }, 220);
   }
 }

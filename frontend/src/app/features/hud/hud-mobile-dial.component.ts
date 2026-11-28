@@ -1,13 +1,15 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import { Backpack, Box, EyeOff, Maximize2, Search, LucideAngularModule } from 'lucide-angular';
+import { InputDeviceBadgeComponent } from '../../shared/components/input-device-badge.component';
 
 @Component({
   selector: 'app-hud-mobile-dial',
   standalone: true,
-  imports: [LucideAngularModule],
+  imports: [LucideAngularModule, InputDeviceBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <nav class="mobile-dial hud-panel" aria-label="Controles táteis">
+      <app-input-device-badge device="mobile" />
       <button type="button" class="dial-item" (click)="toggleSidebar.emit()">
         <lucide-icon [img]="icons.Backpack" [size]="15" [strokeWidth]="1.75" />
         <span>Mochila</span>

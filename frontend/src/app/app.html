@@ -20,14 +20,17 @@
   @if (gamepadService.connected()) {
     <div
       class="gamepad-cursor"
+      [class.is-hidden]="gamepadService.cursorHidden()"
       [style.left.px]="gamepadService.cursorX()"
       [style.top.px]="gamepadService.cursorY()"
       aria-hidden="true"
     >
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="8" stroke="#F44E8F" stroke-width="1.5" />
-        <path d="M12 2v4M12 18v4M2 12h4M18 12h4" stroke="#F44E8F" stroke-width="1.5" stroke-linecap="round" />
-        <circle cx="12" cy="12" r="2" fill="#FFA66B" />
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <circle cx="16" cy="16" r="10" stroke="#120B1E" stroke-width="3.6" opacity="0.88" />
+        <path d="M16 2v6M16 24v6M2 16h6M24 16h6" stroke="#120B1E" stroke-width="3.6" stroke-linecap="round" opacity="0.88" />
+        <circle cx="16" cy="16" r="10" stroke="#F44E8F" stroke-width="1.9" />
+        <path d="M16 2v6M16 24v6M2 16h6M24 16h6" stroke="#FFA66B" stroke-width="1.9" stroke-linecap="round" />
+        <circle cx="16" cy="16" r="2.6" fill="#FFF6F8" stroke="#120B1E" stroke-width="1.2" />
       </svg>
     </div>
   }
@@ -48,6 +51,7 @@
       [query]="searchQuery()"
       [placeholder]="platform.searchPlaceholder()"
       (queryChange)="onQuickSearchQuery($event)"
+      (hideOtherPoisChange)="onQuickSearchHideOthersChange($event)"
       (selectPoi)="selectQuickSearchResult($event)"
       (closeSearch)="quickSearchOpen.set(false)"
     />
@@ -58,7 +62,7 @@
       class="hud-panel backpack-trigger"
       [class.is-open]="sidebarOpen() || wheelOpen()"
       (click)="toggleSidebar()"
-      [attr.data-tooltip]="(sidebarOpen() || wheelOpen()) ? 'Fechar Mochila (M)' : 'Abrir Mochila (M)'"
+      [attr.data-tooltip]="platform.backpackTooltip(sidebarOpen() || wheelOpen())"
       [attr.aria-expanded]="sidebarOpen() || wheelOpen()"
       [attr.aria-label]="(sidebarOpen() || wheelOpen()) ? 'Fechar mochila' : 'Abrir mochila'"
     >
@@ -165,7 +169,10 @@
                   [class.is-active]="selectedCategory() === category"
                   (click)="selectCategory(category)"
                 >
-                  {{ category }}
+                  @if (category !== 'Todas') {
+                    <app-poi-blip-icon [category]="category" [size]="12" variant="glyph" />
+                  }
+                  <span>{{ category }}</span>
                 </button>
               }
             </div>
@@ -190,6 +197,48 @@
                 Nítido HD
               </button>
             </div>
+            @if (mapService.routePois().length > 0) {
+              <div class="filters-header" style="margin-top: 10px;">
+                <span class="filters-heading font-mono-tactical">MINHA ROTA ({{ mapService.routePois().length }})</span>
+                <button
+                  type="button"
+                  class="filter-chip"
+                  style="min-height: 22px; padding: 2px 8px; font-size: 10px;"
+                  (click)="mapService.clearRoute()"
+                >
+                  Limpar
+                </button>
+              </div>
+              <div class="filter-chips" style="flex-direction: column; align-items: stretch;">
+                @for (stop of mapService.routePois(); track stop.id; let idx = $index) {
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <button
+                      type="button"
+                      class="filter-chip"
+                      style="flex: 1; justify-content: flex-start;"
+                      (click)="mapService.flyToPoi(stop, true)"
+                    >
+                      <span
+                        style="width: 16px; height: 16px; border-radius: 999px; font-size: 10px; font-weight: 800; color: #120B1E; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;"
+                        [style.background]="mapService.getRouteStepColor(idx + 1)"
+                      >
+                        {{ idx + 1 }}
+                      </span>
+                      <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ stop.name }}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="filter-chip"
+                      style="min-height: 28px; padding: 2px 8px;"
+                      (click)="mapService.togglePoiMark(stop)"
+                      aria-label="Remover parada da rota"
+                    >
+                      ×
+                    </button>
+                  </div>
+                }
+              </div>
+            }
           </section>
         </div>
       </aside>
@@ -230,7 +279,7 @@
         class="icon-btn"
         [class.is-active]="mapService.isPinMode()"
         (click)="mapService.togglePinMode()"
-        data-tooltip="Marcar ponto no mapa (P)"
+        [attr.data-tooltip]="platform.pinModeTooltip()"
         aria-label="Marcar ponto no mapa"
       >
         <lucide-icon [img]="icons.MapPin" [size]="18" [strokeWidth]="1.75" />
@@ -258,6 +307,29 @@
     <!-- POI Detail Mini-Card -->
     @if (mapService.selectedPoi(); as poi) {
       <article class="poi-card hud-panel" aria-label="Detalhes do ponto de interesse">
+        @if (mapService.coLocatedPois().length > 1) {
+          <div class="poi-stack-switcher" role="group" aria-label="Alternar pontos neste local">
+            <button
+              type="button"
+              class="poi-stack-btn"
+              (click)="mapService.cycleCoLocatedPoi(-1)"
+              aria-label="Ponto anterior neste local"
+            >
+              ‹
+            </button>
+            <span class="poi-stack-label font-mono-tactical">
+              {{ mapService.coLocatedPois().indexOf(poi) + 1 }} / {{ mapService.coLocatedPois().length }} neste local
+            </span>
+            <button
+              type="button"
+              class="poi-stack-btn"
+              (click)="mapService.cycleCoLocatedPoi(1)"
+              aria-label="Próximo ponto neste local"
+            >
+              ›
+            </button>
+          </div>
+        }
         <header class="poi-card-header">
           <div>
             <span class="poi-badge font-mono-tactical">{{ poi.category }} · {{ poi.region }}</span>
@@ -273,13 +345,25 @@
           </button>
         </header>
         <p class="poi-desc">{{ poi.description }}</p>
+        <div class="poi-card-actions" style="margin-top: 10px; display: flex; gap: 8px;">
+          @let step = mapService.getRouteStep(poi.id);
+          <button
+            type="button"
+            class="filter-chip"
+            [class.is-active]="step > 0"
+            (click)="mapService.togglePoiMark(poi)"
+          >
+            <span>{{ step > 0 ? 'Remover da rota (#' + step + ')' : 'Adicionar à rota' }}</span>
+            <app-shortcut-key-badge [key]="platform.shortcutKey('routeToggle')" />
+          </button>
+        </div>
       </article>
     }
 
     <!-- Platform-specific Bottom HUD -->
     @switch (platform.mode()) {
       @case ('console') {
-        <app-hud-console-bar />
+        <app-hud-console-bar [compact]="quickSearchOpen() || wheelOpen() || sidebarOpen()" />
       }
       @case ('mobile') {
         <app-hud-mobile-dial
@@ -303,7 +387,8 @@
       aria-label="Sair do modo cinema"
     >
       <lucide-icon [img]="icons.EyeOff" [size]="16" [strokeWidth]="1.75" />
-      <span>{{ platform.cinemaExitLabel() }}</span>
+      <span>Sair do Modo Cinema</span>
+      <app-shortcut-key-badge [key]="platform.shortcutKey('cinemaExit')" />
     </button>
   }
 </div>

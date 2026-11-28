@@ -1,11 +1,14 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { InputDeviceBadgeComponent } from '../../shared/components/input-device-badge.component';
 
 @Component({
   selector: 'app-hud-desktop-bar',
   standalone: true,
+  imports: [InputDeviceBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="gamepad-hud desktop-hints hud-panel" aria-label="Atalhos de teclado">
+      <app-input-device-badge device="desktop" />
       <div class="legend-item">
         <kbd class="legend-key font-mono-tactical">M</kbd>
         <span class="legend-label">Mochila</span>

@@ -10,6 +10,7 @@ import {
   viewChild,
 } from '@angular/core';
 import {
+  ChevronLeft,
   ChevronRight,
   Clock,
   Flame,
@@ -21,31 +22,26 @@ import {
   X,
 } from 'lucide-angular';
 import { LeonidaPoi } from '../../core/data/leonida-map.data';
+import { getPoiCategoryMeta } from '../../core/data/poi-category-icons';
 import { MapService } from '../../core/services/map.service';
+import { PlatformContextService } from '../../core/services/platform-context.service';
+import { PoiBlipIconComponent } from '../../shared/components/poi-blip-icon.component';
+import { ShortcutKeyBadgeComponent } from '../../shared/components/shortcut-key-badge.component';
 
 const RECENT_POIS_KEY = 'leonida_recent_pois';
 const POI_HITS_KEY = 'leonida_poi_hits';
+const HIDE_OTHERS_KEY = 'leonida_qs_hide_others';
 
-const CATEGORY_COLORS: Record<string, string> = {
-  Hotéis: '#ff4fd8',
-  'Pontos-Chave': '#ffb458',
-  Lojas: '#22d3ee',
-  'Lojas e Comércio': '#22d3ee',
-  Transporte: '#a855f7',
-  Natureza: '#4ade80',
-  Eventos: '#fb7185',
-  Acessíveis: '#facc15',
-};
-
-const FALLBACK_COLORS = [
-  '#ff4fd8',
-  '#ffb458',
-  '#22d3ee',
-  '#a855f7',
-  '#4ade80',
-  '#fb7185',
-  '#facc15',
-];
+function loadHideOthersPref(): boolean {
+  if (typeof localStorage === 'undefined') {
+    return false;
+  }
+  try {
+    return localStorage.getItem(HIDE_OTHERS_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
 
 function loadRecentPois(): LeonidaPoi[] {
   if (typeof localStorage === 'undefined') {
@@ -76,7 +72,7 @@ function loadPoiHits(): Record<string, number> {
 @Component({
   selector: 'app-quick-search',
   standalone: true,
-  imports: [LucideAngularModule],
+  imports: [LucideAngularModule, PoiBlipIconComponent, ShortcutKeyBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (isOpen()) {
@@ -111,10 +107,35 @@ function loadPoiHits(): Record<string, number> {
             class="qs-kbd"
             (click)="closeSearch.emit()"
             aria-label="Fechar busca"
-            title="Fechar (ESC)"
+            [attr.title]="platform.formatWithShortcut('Fechar', 'closeModal')"
           >
-            ESC
+            <app-shortcut-key-badge [key]="platform.shortcutKey('closeModal')" />
           </button>
+        </div>
+
+        <div class="qs-mode-bar" role="group" aria-label="Comportamento no mapa ao buscar">
+          <span class="qs-mode-label">No mapa:</span>
+          <div class="qs-mode-switch">
+            @if (!platform.isMobile()) {
+              <app-shortcut-key-badge [key]="platform.shortcutKey('toggleMapMode')" />
+            }
+            <button
+              type="button"
+              class="qs-mode-btn"
+              [class.is-active]="!hideOtherPois()"
+              (click)="setHideOtherPois(false)"
+            >
+              Só ir ao local
+            </button>
+            <button
+              type="button"
+              class="qs-mode-btn"
+              [class.is-active]="hideOtherPois()"
+              (click)="setHideOtherPois(true)"
+            >
+              Ocultar outros
+            </button>
+          </div>
         </div>
 
         @if (query().trim().length > 0) {
@@ -128,13 +149,12 @@ function loadPoiHits(): Record<string, number> {
               @for (group of groupedSearchResults(); track group.category) {
                 <section class="qs-group">
                   <div class="qs-group-header">
-                    <span class="qs-dot" [style.background]="getCategoryColor(group.category)"></span>
+                    <app-poi-blip-icon [category]="group.category" [size]="20" variant="badge" />
                     <span class="qs-group-title">{{ group.category }}</span>
                     <span class="qs-group-count">{{ group.items.length }}</span>
                   </div>
                   <ul class="qs-list">
                     @for (poi of group.items; track poi.id) {
-                      @let color = getCategoryColor(poi.category);
                       <li>
                         <button
                           type="button"
@@ -142,14 +162,7 @@ function loadPoiHits(): Record<string, number> {
                           [class.is-highlighted]="isPoiHighlighted(poi)"
                           (click)="choosePoi(poi)"
                         >
-                          <span
-                            class="qs-item-icon"
-                            [style.color]="color"
-                            [style.background]="color + '1C'"
-                            [style.borderColor]="color + '44'"
-                          >
-                            <lucide-icon [img]="icons.MapPin" [size]="13" [strokeWidth]="2" />
-                          </span>
+                          <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [size]="30" variant="badge" />
                           <div class="qs-item-info">
                             <span class="qs-item-name">{{ poi.name }}</span>
                             <span class="qs-item-region">{{ poi.region }}</span>
@@ -170,6 +183,9 @@ function loadPoiHits(): Record<string, number> {
           }
         } @else {
           <div class="qs-tabs" role="tablist" aria-label="Navegação rápida">
+            @if (!platform.isMobile()) {
+              <app-shortcut-key-badge [key]="platform.shortcutKey('cycleSearchTab')" />
+            }
             <button
               type="button"
               role="tab"
@@ -209,39 +225,74 @@ function loadPoiHits(): Record<string, number> {
           </div>
 
           @if (activeTab() === 'categories') {
-            <div
-              class="qs-cat-pills"
-              role="group"
-              aria-label="Filtrar por categoria"
-              (wheel)="onPillsWheel($event)"
-            >
+            <div class="qs-cat-pills-wrap">
               <button
                 type="button"
-                class="qs-cat-pill"
-                [class.is-active]="selectedCategoryFilter() === 'Todas'"
-                (click)="selectedCategoryFilter.set('Todas'); highlightedIndex.set(-1)"
+                class="qs-pills-nav is-prev"
+                (click)="scrollPills(pillsRow, -1)"
+                aria-label="Categorias anteriores"
+                title="Anterior"
               >
-                <span>Todas</span>
+                @if (!platform.isMobile()) {
+                  <app-shortcut-key-badge [key]="platform.shortcutKey('scrollCatPrev')" />
+                } @else {
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M10.5 3L5.5 8L10.5 13" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M14 5L11 8L14 11" stroke="#FFB458" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                }
               </button>
-              @for (group of allCategoryGroups(); track group.category) {
+              <div
+                #pillsRow
+                class="qs-cat-pills"
+                role="group"
+                aria-label="Filtrar por categoria"
+                (wheel)="onPillsWheel($event)"
+              >
                 <button
                   type="button"
                   class="qs-cat-pill"
-                  [class.is-active]="selectedCategoryFilter() === group.category"
-                  (click)="selectedCategoryFilter.set(group.category); highlightedIndex.set(-1)"
+                  [class.is-active]="selectedCategoryFilter() === 'Todas'"
+                  (click)="selectedCategoryFilter.set('Todas'); highlightedIndex.set(-1)"
                 >
-                  <span class="qs-dot" [style.background]="getCategoryColor(group.category)"></span>
-                  <span>{{ group.category }}</span>
-                  <span class="qs-pill-count">{{ group.items.length }}</span>
+                  <span>Todas</span>
                 </button>
-              }
+                @for (group of allCategoryGroups(); track group.category) {
+                  <button
+                    type="button"
+                    class="qs-cat-pill"
+                    [class.is-active]="selectedCategoryFilter() === group.category"
+                    (click)="selectedCategoryFilter.set(group.category); highlightedIndex.set(-1)"
+                  >
+                    <app-poi-blip-icon [category]="group.category" [size]="13" variant="glyph" />
+                    <span>{{ group.category }}</span>
+                    <span class="qs-pill-count">{{ group.items.length }}</span>
+                  </button>
+                }
+              </div>
+              <button
+                type="button"
+                class="qs-pills-nav is-next"
+                (click)="scrollPills(pillsRow, 1)"
+                aria-label="Próximas categorias"
+                title="Próximo"
+              >
+                @if (!platform.isMobile()) {
+                  <app-shortcut-key-badge [key]="platform.shortcutKey('scrollCatNext')" />
+                } @else {
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M5.5 3L10.5 8L5.5 13" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+                    <path d="M2 5L5 8L2 11" stroke="#FFB458" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                }
+              </button>
             </div>
 
             <div class="qs-body" role="listbox" aria-label="Locais por categoria">
               @for (group of filteredCategoryGroups(); track group.category) {
-                <section class="qs-group">
+                <section class="qs-group" [attr.data-category]="group.category">
                   <div class="qs-group-header">
-                    <span class="qs-dot" [style.background]="getCategoryColor(group.category)"></span>
+                    <app-poi-blip-icon [category]="group.category" [size]="20" variant="badge" />
                     <span class="qs-group-title">{{ group.category }}</span>
                     <span class="qs-group-count">{{ group.items.length }}</span>
                     @if (selectedCategoryFilter() === 'Todas' && group.items.length > 3) {
@@ -260,7 +311,6 @@ function loadPoiHits(): Record<string, number> {
                   </div>
                   <ul class="qs-list">
                     @for (poi of getVisibleItemsForGroup(group); track poi.id) {
-                      @let color = getCategoryColor(poi.category);
                       <li>
                         <button
                           type="button"
@@ -268,14 +318,7 @@ function loadPoiHits(): Record<string, number> {
                           [class.is-highlighted]="isPoiHighlighted(poi)"
                           (click)="choosePoi(poi)"
                         >
-                          <span
-                            class="qs-item-icon"
-                            [style.color]="color"
-                            [style.background]="color + '1C'"
-                            [style.borderColor]="color + '44'"
-                          >
-                            <lucide-icon [img]="icons.MapPin" [size]="13" [strokeWidth]="2" />
-                          </span>
+                          <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [size]="30" variant="badge" />
                           <div class="qs-item-info">
                             <span class="qs-item-name">{{ poi.name }}</span>
                             <span class="qs-item-region">{{ poi.region }}</span>
@@ -308,14 +351,7 @@ function loadPoiHits(): Record<string, number> {
                         [class.is-highlighted]="isPoiHighlighted(poi)"
                         (click)="choosePoi(poi)"
                       >
-                        <span
-                          class="qs-item-icon"
-                          [style.color]="color"
-                          [style.background]="color + '1C'"
-                          [style.borderColor]="color + '44'"
-                        >
-                          <lucide-icon [img]="icons.MapPin" [size]="13" [strokeWidth]="2" />
-                        </span>
+                        <app-poi-blip-icon [category]="poi.category" [itemName]="poi.name" [size]="30" variant="badge" />
                         <div class="qs-item-info">
                           <span class="qs-item-name">{{ poi.name }}</span>
                           <span class="qs-item-region">{{ poi.region }}</span>
@@ -366,6 +402,7 @@ function loadPoiHits(): Record<string, number> {
                       >
                         #{{ idx + 1 }}
                       </span>
+                      <app-poi-blip-icon [category]="entry.poi.category" [itemName]="entry.poi.name" [size]="28" variant="badge" />
                       <div class="qs-item-info">
                         <span class="qs-item-name">{{ entry.poi.name }}</span>
                         <span class="qs-item-region">{{ entry.poi.region }}</span>
@@ -391,9 +428,30 @@ function loadPoiHits(): Record<string, number> {
 
         <div class="qs-footer">
           <div class="qs-footer-hints">
-            <span>↑↓ Navegar</span>
-            <span>↵ Ir</span>
-            <span>ESC Fechar</span>
+            @if (platform.isMobile()) {
+              <span>Toque para selecionar</span>
+            } @else {
+              <span class="qs-hint-item">
+                <app-shortcut-key-badge [key]="platform.shortcutKey('navigateList')" />
+                <span>Navegar</span>
+              </span>
+              <span class="qs-hint-item">
+                <app-shortcut-key-badge [key]="platform.shortcutKey('expandToggle')" />
+                <span>Ver todos</span>
+              </span>
+              <span class="qs-hint-item">
+                <app-shortcut-key-badge [key]="platform.shortcutKey('closeModal')" />
+                <span>Fechar</span>
+              </span>
+              <span class="qs-hint-item">
+                <app-shortcut-key-badge [key]="platform.shortcutKey('focusSearchInput')" />
+                <span>Busca</span>
+              </span>
+              <span class="qs-hint-item">
+                <app-shortcut-key-badge [key]="platform.shortcutKey('confirmItem')" />
+                <span>Ir</span>
+              </span>
+            }
           </div>
           <span class="qs-footer-total">{{ totalPoisCount() }} locais</span>
         </div>
@@ -549,15 +607,66 @@ function loadPoiHits(): Record<string, number> {
       }
 
       .qs-kbd:focus-visible {
-        outline: 2px solid #4ce0d2;
+        outline: 2px solid #f44e8f;
         outline-offset: 1px;
+      }
+
+      .qs-mode-bar {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 8px;
+        padding: 4px 2px 0;
+      }
+
+      .qs-mode-label {
+        font-size: 10.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: rgba(255, 246, 248, 0.56);
+      }
+
+      .qs-mode-switch {
+        display: inline-flex;
+        padding: 2px;
+        border-radius: 8px;
+        background: rgba(10, 6, 18, 0.72);
+        border: 1px solid rgba(255, 246, 248, 0.1);
+        gap: 2px;
+      }
+
+      .qs-mode-btn {
+        border: 1px solid transparent;
+        background: transparent;
+        color: rgba(255, 246, 248, 0.65);
+        font-size: 10.5px;
+        font-weight: 700;
+        padding: 3px 9px;
+        border-radius: 6px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: all 120ms ease;
+      }
+
+      .qs-mode-btn:hover {
+        color: #fff6f8;
+      }
+
+      .qs-mode-btn.is-active {
+        color: #fff6f8;
+        background: linear-gradient(135deg, rgba(244, 78, 143, 0.28) 0%, rgba(255, 166, 107, 0.24) 100%);
+        border-color: rgba(255, 180, 88, 0.55);
       }
 
       .qs-tabs {
         position: relative;
         z-index: 1;
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        display: flex;
+        align-items: center;
         gap: 4px;
         margin-top: 10px;
         padding: 3px;
@@ -567,6 +676,8 @@ function loadPoiHits(): Record<string, number> {
       }
 
       .qs-tab {
+        flex: 1;
+        min-width: 0;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -604,19 +715,49 @@ function loadPoiHits(): Record<string, number> {
         color: inherit;
       }
 
-      .qs-cat-pills {
+      .qs-cat-pills-wrap {
         position: relative;
         z-index: 1;
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
         margin-top: 9px;
-        padding-bottom: 2px;
+      }
+
+      .qs-pills-nav {
+        flex-shrink: 0;
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+        border: 1px solid rgba(244, 78, 143, 0.38);
+        background: linear-gradient(135deg, rgba(244, 78, 143, 0.16) 0%, rgba(255, 180, 88, 0.12) 100%);
+        color: #fff6f8;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+      }
+
+      .qs-pills-nav:hover {
+        background: linear-gradient(135deg, rgba(244, 78, 143, 0.34) 0%, rgba(255, 180, 88, 0.28) 100%);
+        border-color: #ffb458;
+        box-shadow: 0 0 12px rgba(244, 78, 143, 0.35);
+        transform: scale(1.06);
+      }
+
+      .qs-cat-pills {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 4px;
         overflow-x: auto;
+        scroll-snap-type: x proximity;
+        scroll-padding-inline: 4px;
         scrollbar-width: none;
         -ms-overflow-style: none;
-        -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent 100%);
-        mask-image: linear-gradient(90deg, #000 92%, transparent 100%);
       }
 
       .qs-cat-pills::-webkit-scrollbar {
@@ -625,6 +766,7 @@ function loadPoiHits(): Record<string, number> {
 
       .qs-cat-pill {
         flex-shrink: 0;
+        scroll-snap-align: start;
         display: inline-flex;
         align-items: center;
         gap: 5px;
@@ -642,14 +784,15 @@ function loadPoiHits(): Record<string, number> {
 
       .qs-cat-pill:hover {
         color: #fff6f8;
-        border-color: rgba(255, 246, 248, 0.26);
-        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 180, 88, 0.4);
+        background: rgba(255, 180, 88, 0.1);
       }
 
       .qs-cat-pill.is-active {
-        color: #4ce0d2;
-        background: rgba(76, 224, 210, 0.14);
-        border-color: rgba(76, 224, 210, 0.48);
+        color: #fff6f8;
+        background: linear-gradient(135deg, rgba(244, 78, 143, 0.28) 0%, rgba(255, 166, 107, 0.24) 100%);
+        border-color: rgba(255, 180, 88, 0.62);
+        box-shadow: 0 0 10px rgba(244, 78, 143, 0.22);
       }
 
       .qs-pill-count {
@@ -678,7 +821,7 @@ function loadPoiHits(): Record<string, number> {
         gap: 4px;
         border: none;
         background: transparent;
-        color: #4ce0d2;
+        color: #ffb458;
         font-size: 10.5px;
         font-weight: 700;
         cursor: pointer;
@@ -756,9 +899,9 @@ function loadPoiHits(): Record<string, number> {
 
       .qs-expand-pill {
         margin-left: auto;
-        border: 1px solid rgba(76, 224, 210, 0.28);
-        background: rgba(76, 224, 210, 0.1);
-        color: #4ce0d2;
+        border: 1px solid rgba(255, 180, 88, 0.35);
+        background: rgba(255, 180, 88, 0.12);
+        color: #ffb458;
         font-size: 10px;
         font-weight: 700;
         border-radius: 999px;
@@ -769,17 +912,18 @@ function loadPoiHits(): Record<string, number> {
       }
 
       .qs-expand-pill:hover {
-        background: rgba(76, 224, 210, 0.2);
-        border-color: rgba(76, 224, 210, 0.52);
+        background: rgba(244, 78, 143, 0.22);
+        border-color: rgba(244, 78, 143, 0.55);
+        color: #fff6f8;
       }
 
       .qs-list {
         list-style: none;
         margin: 0;
-        padding: 0;
+        padding: 4px;
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 6px;
       }
 
       .qs-item {
@@ -808,24 +952,6 @@ function loadPoiHits(): Record<string, number> {
       .qs-item.is-highlighted .qs-chevron {
         color: #ffa66b;
         transform: translateX(2px);
-      }
-
-      .qs-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }
-
-      .qs-item-icon {
-        width: 26px;
-        height: 26px;
-        border-radius: 8px;
-        border: 1px solid;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
       }
 
       .qs-item-info {
@@ -944,8 +1070,15 @@ function loadPoiHits(): Record<string, number> {
 
       .qs-footer-hints {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 10px;
+        gap: 8px 12px;
+      }
+
+      .qs-hint-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
       }
 
       .qs-footer-total {
@@ -979,6 +1112,7 @@ function loadPoiHits(): Record<string, number> {
 })
 export class QuickSearchComponent {
   private readonly mapService = inject(MapService);
+  readonly platform = inject(PlatformContextService);
   private readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('quickSearchInput');
 
   readonly isOpen = input(false);
@@ -988,8 +1122,10 @@ export class QuickSearchComponent {
   readonly queryChange = output<string>();
   readonly selectPoi = output<LeonidaPoi>();
   readonly closeSearch = output<void>();
+  readonly hideOtherPoisChange = output<boolean>();
 
   readonly totalPoisCount = this.mapService.totalPoisCount;
+  readonly hideOtherPois = signal<boolean>(loadHideOthersPref());
   readonly activeTab = signal<'categories' | 'recent' | 'popular'>('categories');
   readonly selectedCategoryFilter = signal<string>('Todas');
   readonly expandedCategories = signal<Record<string, boolean>>({});
@@ -1004,6 +1140,7 @@ export class QuickSearchComponent {
     Flame,
     Layers,
     MapPin,
+    ChevronLeft,
     ChevronRight,
     Trash2,
   };
@@ -1066,7 +1203,104 @@ export class QuickSearchComponent {
 
   focusInput(): void {
     this.highlightedIndex.set(-1);
-    this.searchInput()?.nativeElement.focus();
+    const inputEl = this.searchInput()?.nativeElement;
+    if (!inputEl) {
+      return;
+    }
+    if (typeof document !== 'undefined') {
+      for (const prev of Array.from(document.querySelectorAll('.gamepad-focus'))) {
+        prev.classList.remove('gamepad-focus');
+      }
+      if (this.platform.isConsole()) {
+        inputEl.classList.add('gamepad-focus');
+      }
+    }
+    inputEl.focus();
+    inputEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  private readonly pillsRow = viewChild<ElementRef<HTMLElement>>('pillsRow');
+
+  toggleHideOthers(): void {
+    this.setHideOtherPois(!this.hideOtherPois());
+    setTimeout(() => this.focusMatchingControl('.qs-mode-btn.is-active'), 0);
+  }
+
+  cycleTab(): void {
+    const order: Array<'categories' | 'recent' | 'popular'> = ['categories', 'recent', 'popular'];
+    const next = order[(order.indexOf(this.activeTab()) + 1) % order.length];
+    this.activeTab.set(next);
+    this.highlightedIndex.set(-1);
+    setTimeout(() => this.focusMatchingControl('.qs-tab.is-active'), 0);
+  }
+
+  private focusMatchingControl(selector: string): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const el = document.querySelector(`.quick-search-bar ${selector}`) as HTMLElement | null;
+    if (!el) {
+      return;
+    }
+    for (const prev of Array.from(document.querySelectorAll('.gamepad-focus'))) {
+      prev.classList.remove('gamepad-focus');
+    }
+    if (this.platform.isConsole()) {
+      el.classList.add('gamepad-focus');
+    }
+    el.focus({ preventScroll: false });
+  }
+
+  scrollCategories(direction: -1 | 1): void {
+    const categories = ['Todas', ...this.allCategoryGroups().map((g) => g.category)];
+    if (categories.length === 0) {
+      return;
+    }
+    const currentIdx = categories.indexOf(this.selectedCategoryFilter());
+    const nextIdx =
+      currentIdx === -1
+        ? 0
+        : (currentIdx + direction + categories.length) % categories.length;
+    this.selectedCategoryFilter.set(categories[nextIdx]);
+    this.highlightedIndex.set(-1);
+
+    setTimeout(() => {
+      const el = document.querySelector('.quick-search-bar .qs-cat-pill.is-active') as HTMLElement | null;
+      el?.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+      this.focusMatchingControl('.qs-cat-pill.is-active');
+    }, 0);
+  }
+
+  toggleActiveGroupExpand(): void {
+    if (typeof document === 'undefined' || this.activeTab() !== 'categories') {
+      return;
+    }
+    const focused =
+      (document.querySelector('.quick-search-bar .gamepad-focus') as HTMLElement | null) ??
+      (document.activeElement as HTMLElement | null);
+    const groupCat = focused?.closest('.qs-group')?.getAttribute('data-category');
+    const targetCategory =
+      groupCat ??
+      this.filteredCategoryGroups().find((g) => g.items.length > 3)?.category ??
+      null;
+    if (targetCategory) {
+      this.toggleCategoryExpand(targetCategory);
+    }
+  }
+
+  scrollPills(el: HTMLElement, direction: -1 | 1): void {
+    const step = Math.max(120, Math.round(el.clientWidth * 0.72));
+    el.scrollBy({ left: direction * step, behavior: 'smooth' });
+  }
+
+  setHideOtherPois(hide: boolean): void {
+    this.hideOtherPois.set(hide);
+    if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem(HIDE_OTHERS_KEY, String(hide));
+      } catch {}
+    }
+    this.hideOtherPoisChange.emit(hide);
   }
 
   onPillsWheel(event: WheelEvent): void {
@@ -1077,15 +1311,7 @@ export class QuickSearchComponent {
   }
 
   getCategoryColor(category: string): string {
-    const direct = CATEGORY_COLORS[category];
-    if (direct) {
-      return direct;
-    }
-    let hash = 0;
-    for (let i = 0; i < category.length; i++) {
-      hash = (hash * 31 + category.charCodeAt(i)) | 0;
-    }
-    return FALLBACK_COLORS[Math.abs(hash) % FALLBACK_COLORS.length];
+    return getPoiCategoryMeta(category).color;
   }
 
   getVisibleItemsForGroup(group: { category: string; items: LeonidaPoi[] }): LeonidaPoi[] {

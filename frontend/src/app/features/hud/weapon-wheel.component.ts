@@ -386,14 +386,14 @@ export type { WheelAction };
         font-size: 10px;
         font-weight: 600;
         cursor: pointer;
-        opacity: 0;
         box-shadow: 0 6px 18px rgba(18, 11, 30, 0.65);
-        animation: slotIn 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        animation: slotIn 160ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
         transition: border-color 140ms ease, background-color 140ms ease, scale 140ms ease;
       }
 
       .fan-item:hover,
       .fan-item:focus-visible {
+        opacity: 1;
         border-color: var(--vice-magenta);
         background: rgba(244, 78, 143, 0.24);
         scale: 1.06;

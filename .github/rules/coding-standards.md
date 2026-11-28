@@ -17,7 +17,10 @@ Este documento define as diretrizes obrigatórias de sintaxe, estrutura, qualida
    - **Padrão de Commits**: Sempre em inglês seguindo Conventional Commits: `feat(...)`, `fix(...)`, `refactor(...)`, `test(...)`, `chore(...)`, `docs(...)`.
 3. **Protocolo Obrigatório de Conclusão (Definition of Done — DoD)**:
    - Nenhuma tarefa é considerada concluída sem cumprir os 3 pilares:
-     1. **Totalmente Testado**: PHPUnit (backend) + Jest/Jasmine & Playwright E2E (frontend).
+     1. **Totalmente Testado (Regra Obrigatória de Regressão)**: Todo **bug corrigido** e toda **nova feature** deve obrigatoriamente incluir ou atualizar:
+        - **Teste unitário** (`Jest` no frontend / `PHPUnit` no backend) cobrindo a lógica ou caso de borda afetado.
+        - **Teste E2E** (`Playwright` em `frontend/e2e/`) cobrindo o fluxo real de interface/interação afetado, garantindo que o problema não volte a ocorrer.
+        - **Execução obrigatória**: rodar build de produção + testes unitários + testes E2E após a edição final.
      2. **Totalmente Validado**: Critérios de aceite, análise estática (**PHPStan** e **ESLint + TS strict** com 0 erros críticos), segurança e performance.
      3. **Totalmente Documentado**: OpenAPI / `docs/API.md`, migrations em `database/migrations/`, `CHANGELOG.md`, `README.md` e `.env.example`.
 

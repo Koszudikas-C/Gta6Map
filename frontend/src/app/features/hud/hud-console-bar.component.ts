@@ -1,28 +1,23 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
-import { Gamepad2, LucideAngularModule } from 'lucide-angular';
+import { ChangeDetectionStrategy, Component, inject, input } from '@angular/core';
 import { GamepadService } from '../../core/services/gamepad.service';
+import { InputDeviceBadgeComponent } from '../../shared/components/input-device-badge.component';
+import { ShortcutKeyBadgeComponent } from '../../shared/components/shortcut-key-badge.component';
 
 @Component({
   selector: 'app-hud-console-bar',
   standalone: true,
-  imports: [LucideAngularModule],
+  imports: [InputDeviceBadgeComponent, ShortcutKeyBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="gamepad-hud hud-panel" role="status" aria-live="polite">
-      <lucide-icon [img]="gamepadIcon" [size]="16" [strokeWidth]="1.75" class="gamepad-icon" />
-      @for (item of gamepadService.legends(); track item.button) {
-        <div class="legend-item">
-          <kbd class="legend-key font-mono-tactical">
-            @if (item.button === '△') {
-              <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
-                <polygon points="6,1.5 10.8,10 1.2,10" />
-              </svg>
-            } @else {
-              {{ item.button }}
-            }
-          </kbd>
-          <span class="legend-label">{{ item.label }}</span>
-        </div>
+      <app-input-device-badge [device]="gamepadService.controllerType()" />
+      @if (!compact()) {
+        @for (item of gamepadService.legends(); track item.button) {
+          <div class="legend-item">
+            <app-shortcut-key-badge [key]="item.button" />
+            <span class="legend-label">{{ item.label }}</span>
+          </div>
+        }
       }
     </div>
   `,
@@ -35,9 +30,18 @@ import { GamepadService } from '../../core/services/gamepad.service';
         transform: translateX(-50%);
         z-index: 25;
         display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        max-width: calc(100vw - 32px);
         align-items: center;
-        gap: 16px;
-        padding: 8px 16px;
+        gap: 10px 14px;
+        padding: 8px 14px;
+      }
+
+      app-input-device-badge {
+        align-self: center;
+        display: inline-flex;
+        align-items: center;
       }
 
       .gamepad-icon {
@@ -70,5 +74,5 @@ import { GamepadService } from '../../core/services/gamepad.service';
 })
 export class HudConsoleBarComponent {
   readonly gamepadService = inject(GamepadService);
-  readonly gamepadIcon = Gamepad2;
+  readonly compact = input(false);
 }

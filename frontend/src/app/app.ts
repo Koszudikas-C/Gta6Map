@@ -27,7 +27,7 @@ import {
   LucideAngularModule,
 } from 'lucide-angular';
 import { LeonidaPoi, POI_CATEGORIES } from './core/data/leonida-map.data';
-import { GamepadService } from './core/services/gamepad.service';
+import { DpadDirection, GamepadService } from './core/services/gamepad.service';
 import { MapService } from './core/services/map.service';
 import { PlatformContextService } from './core/services/platform-context.service';
 import { HudConsoleBarComponent } from './features/hud/hud-console-bar.component';
@@ -35,6 +35,8 @@ import { HudDesktopBarComponent } from './features/hud/hud-desktop-bar.component
 import { HudMobileDialComponent } from './features/hud/hud-mobile-dial.component';
 import { QuickSearchComponent } from './features/hud/quick-search.component';
 import { WeaponWheelComponent, WheelAction } from './features/hud/weapon-wheel.component';
+import { PoiBlipIconComponent } from './shared/components/poi-blip-icon.component';
+import { ShortcutKeyBadgeComponent } from './shared/components/shortcut-key-badge.component';
 
 @Component({
   selector: 'app-root',
@@ -45,6 +47,8 @@ import { WeaponWheelComponent, WheelAction } from './features/hud/weapon-wheel.c
     HudConsoleBarComponent,
     QuickSearchComponent,
     WeaponWheelComponent,
+    PoiBlipIconComponent,
+    ShortcutKeyBadgeComponent,
   ],
   templateUrl: './app.html',
   styleUrl: './app.scss',
@@ -74,6 +78,9 @@ export class App implements AfterViewInit, OnDestroy {
   readonly quickSearchOpen = signal(false);
   readonly cinemaMode = signal(false);
   readonly isFullscreen = signal(false);
+  readonly quickSearchHideOthers = signal(
+    typeof localStorage !== 'undefined' && localStorage.getItem('leonida_qs_hide_others') === 'true',
+  );
   readonly searchQuery = signal('');
   readonly clickBursts = signal<{ id: number; x: number; y: number }[]>([]);
   private burstId = 0;
@@ -101,6 +108,19 @@ export class App implements AfterViewInit, OnDestroy {
       onFocusSearch: () => this.focusSearch(),
       onToggleCinema: () => this.toggleCinemaMode(),
       onToggleSidebar: () => this.toggleSidebar(),
+      onBack: () => this.closeActiveOverlay(),
+      onContextualAction: () => this.handleContextualGamepadAction(),
+      onCreatePin: () => this.createCustomPinAtGamepadCursor(),
+      onToggle3D: () => this.handleToggle3DShortcut(),
+      onPrevCategoryPage: () => this.quickSearchOpen() && this.quickSearch?.scrollCategories(-1),
+      onNextCategoryPage: () => this.quickSearchOpen() && this.quickSearch?.scrollCategories(1),
+      onResetView: () => this.handleResetViewShortcut(),
+      isModalOpen: () =>
+        this.quickSearchOpen() ||
+        this.wheelOpen() ||
+        this.sidebarOpen() ||
+        Boolean(document.querySelector('.maplibregl-popup')),
+      onStepFocus: (dir) => this.stepGamepadFocus(dir),
       onCursorClick: (x, y) => this.triggerGamepadClick(x, y),
     });
   }
@@ -111,6 +131,10 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   toggleSidebar(): void {
+    if (this.quickSearchOpen()) {
+      this.quickSearch?.cycleTab();
+      return;
+    }
     if (this.activePanel() !== null) {
       this.activePanel.set(null);
       this.sidebarOpen.set(false);
@@ -153,6 +177,10 @@ export class App implements AfterViewInit, OnDestroy {
   }
 
   toggleCinemaMode(): void {
+    if (this.quickSearchOpen()) {
+      this.quickSearch?.focusInput();
+      return;
+    }
     this.cinemaMode.update((v) => !v);
   }
 
@@ -164,8 +192,266 @@ export class App implements AfterViewInit, OnDestroy {
       queueMicrotask(() => this.searchInput?.nativeElement.focus());
       return;
     }
+    if (this.quickSearchOpen()) {
+      this.quickSearchOpen.set(false);
+      return;
+    }
     this.quickSearchOpen.set(true);
     setTimeout(() => this.quickSearch?.focusInput(), 0);
+  }
+
+  closeActiveOverlay(): void {
+    if (this.cinemaMode()) {
+      this.cinemaMode.set(false);
+    } else if (this.wheelOpen()) {
+      this.wheelOpen.set(false);
+    } else if (this.quickSearchOpen()) {
+      this.quickSearchOpen.set(false);
+    } else if (this.mapService.selectedPoi()) {
+      this.mapService.selectedPoi.set(null);
+    } else if (this.sidebarOpen() || this.activePanel() !== null) {
+      this.activePanel.set(null);
+      this.sidebarOpen.set(false);
+    } else {
+      this.mapService.closeAllCustomPinPopups();
+    }
+  }
+
+  handleContextualGamepadAction(): void {
+    if (this.quickSearchOpen()) {
+      this.quickSearch?.toggleActiveGroupExpand();
+      return;
+    }
+    if (
+      this.wheelOpen() ||
+      this.sidebarOpen() ||
+      Boolean(document.querySelector('.maplibregl-popup'))
+    ) {
+      return;
+    }
+    const selected = this.mapService.selectedPoi();
+    if (selected) {
+      this.mapService.togglePoiMark(selected);
+      return;
+    }
+    this.mapService.togglePinMode();
+  }
+
+  handleToggle3DShortcut(): void {
+    if (this.quickSearchOpen()) {
+      this.quickSearch?.toggleHideOthers();
+      return;
+    }
+    this.mapService.toggle3D();
+  }
+
+  handleResetViewShortcut(): void {
+    if (this.quickSearchOpen() || this.wheelOpen() || this.sidebarOpen()) {
+      return;
+    }
+    this.mapService.resetView();
+  }
+
+  createCustomPinAtGamepadCursor(): void {
+    this.mapService.addCustomPinAtScreen(
+      this.gamepadService.cursorX(),
+      this.gamepadService.cursorY(),
+    );
+  }
+
+  stepGamepadFocus(direction: DpadDirection): void {
+    if (!isPlatformBrowser(this.platformId)) {
+      return;
+    }
+
+    const hasModalOpen =
+      this.quickSearchOpen() ||
+      this.wheelOpen() ||
+      Boolean(document.querySelector('.maplibregl-popup')) ||
+      Boolean(this.mapService.selectedPoi()) ||
+      this.sidebarOpen();
+
+    if (!hasModalOpen) {
+      this.stepMapTargetFocus(direction);
+      return;
+    }
+
+    const scopeSelector = this.quickSearchOpen()
+      ? '.quick-search-bar'
+      : this.wheelOpen()
+        ? document.querySelector('.pin-submenu')
+          ? '.pin-submenu'
+          : '.weapon-wheel'
+        : document.querySelector('.maplibregl-popup')
+          ? '.maplibregl-popup'
+          : this.sidebarOpen()
+            ? '.hud-sidebar:not(.is-collapsed)'
+            : '.poi-card';
+
+    const root = document.querySelector(scopeSelector) ?? document;
+    const candidates = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+    });
+
+    if (candidates.length === 0) {
+      return;
+    }
+
+    const active =
+      (root.querySelector('.gamepad-focus') as HTMLElement | null) ??
+      (document.activeElement as HTMLElement | null);
+    let target: HTMLElement | null = null;
+
+    if (!active || !candidates.includes(active)) {
+      target =
+        direction === 'up' || direction === 'left'
+          ? candidates[candidates.length - 1]
+          : candidates[0];
+    } else {
+      const origin = active.getBoundingClientRect();
+      const ox = origin.left + origin.width / 2;
+      const oy = origin.top + origin.height / 2;
+
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const el of candidates) {
+        if (el === active) {
+          continue;
+        }
+        const rect = el.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+
+        let valid = false;
+        let primary = 0;
+        let secondary = 0;
+        let aligned = false;
+
+        if (direction === 'down') {
+          valid = cy > oy + 4;
+          primary = cy - oy;
+          secondary = Math.abs(cx - ox);
+          aligned = Math.min(origin.right, rect.right) - Math.max(origin.left, rect.left) > 0;
+        } else if (direction === 'up') {
+          valid = cy < oy - 4;
+          primary = oy - cy;
+          secondary = Math.abs(cx - ox);
+          aligned = Math.min(origin.right, rect.right) - Math.max(origin.left, rect.left) > 0;
+        } else if (direction === 'right') {
+          valid = cx > ox + 4;
+          primary = cx - ox;
+          secondary = Math.abs(cy - oy);
+          aligned = Math.min(origin.bottom, rect.bottom) - Math.max(origin.top, rect.top) > 0;
+        } else {
+          valid = cx < ox - 4;
+          primary = ox - cx;
+          secondary = Math.abs(cy - oy);
+          aligned = Math.min(origin.bottom, rect.bottom) - Math.max(origin.top, rect.top) > 0;
+        }
+
+        if (!valid) {
+          continue;
+        }
+
+        if ((direction === 'left' || direction === 'right') && !aligned) {
+          continue;
+        }
+
+        const score = primary + (aligned ? secondary * 0.25 : secondary * 2.5);
+        if (score < bestScore) {
+          bestScore = score;
+          target = el;
+        }
+      }
+    }
+
+    if (!target) {
+      return;
+    }
+
+    for (const prev of Array.from(document.querySelectorAll('.gamepad-focus'))) {
+      prev.classList.remove('gamepad-focus');
+    }
+    target.classList.add('gamepad-focus');
+    target.focus({ preventScroll: false });
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+    const rect = target.getBoundingClientRect();
+    this.gamepadService.setCursorPosition(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+      true,
+    );
+  }
+
+  private stepMapTargetFocus(direction: DpadDirection): void {
+    const targets = this.mapService.getVisibleMapTargets();
+    if (targets.length === 0) {
+      return;
+    }
+
+    const ox = this.gamepadService.cursorX();
+    const oy = this.gamepadService.cursorY();
+    let best: { x: number; y: number } | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const t of targets) {
+      const dx = t.x - ox;
+      const dy = t.y - oy;
+      if (Math.hypot(dx, dy) < 6) {
+        continue;
+      }
+
+      let valid = false;
+      let primary = 0;
+      let secondary = 0;
+      if (direction === 'down') {
+        valid = dy > 6;
+        primary = dy;
+        secondary = Math.abs(dx);
+      } else if (direction === 'up') {
+        valid = dy < -6;
+        primary = -dy;
+        secondary = Math.abs(dx);
+      } else if (direction === 'right') {
+        valid = dx > 6;
+        primary = dx;
+        secondary = Math.abs(dy);
+      } else {
+        valid = dx < -6;
+        primary = -dx;
+        secondary = Math.abs(dy);
+      }
+
+      if (!valid) {
+        continue;
+      }
+      const score = primary + secondary * 1.4;
+      if (score < bestScore) {
+        bestScore = score;
+        best = t;
+      }
+    }
+
+    if (!best) {
+      // Fallback: snap to nearest visible POI/pin if cursor isn't near any in that direction
+      let nearestDist = Number.POSITIVE_INFINITY;
+      for (const t of targets) {
+        const d = Math.hypot(t.x - ox, t.y - oy);
+        if (d > 6 && d < nearestDist) {
+          nearestDist = d;
+          best = t;
+        }
+      }
+    }
+
+    if (best) {
+      this.gamepadService.setCursorPosition(best.x, best.y, false);
+    }
   }
 
   toggleFullscreen(): void {
@@ -187,11 +473,19 @@ export class App implements AfterViewInit, OnDestroy {
 
   onQuickSearchQuery(value: string): void {
     this.searchQuery.set(value);
-    this.mapService.filterPois(value, this.selectedCategory());
+    this.mapService.filterPois(this.quickSearchHideOthers() ? value : '', this.selectedCategory());
+  }
+
+  onQuickSearchHideOthersChange(hide: boolean): void {
+    this.quickSearchHideOthers.set(hide);
+    this.mapService.filterPois(hide ? this.searchQuery() : '', this.selectedCategory());
   }
 
   selectQuickSearchResult(poi: LeonidaPoi): void {
-    this.mapService.flyToPoi(poi);
+    if (this.quickSearchHideOthers()) {
+      this.mapService.isolatePoi(poi);
+    }
+    this.mapService.flyToPoi(poi, !this.quickSearchHideOthers());
     this.quickSearchOpen.set(false);
   }
 
@@ -236,9 +530,35 @@ export class App implements AfterViewInit, OnDestroy {
 
   triggerGamepadClick(x: number, y: number): void {
     this.spawnBurst(x, y);
-    if (isPlatformBrowser(this.platformId)) {
-      const el = document.elementFromPoint(x, y) as HTMLElement | null;
-      el?.click();
+    if (!isPlatformBrowser(this.platformId)) {
+      return;
+    }
+
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!el) {
+      return;
+    }
+
+    if (this.quickSearchOpen() && !el.closest('.quick-search-bar')) {
+      this.quickSearchOpen.set(false);
+    }
+
+    if (el.classList.contains('maplibregl-canvas') || el.closest('.maplibregl-marker')) {
+      this.mapService.handleScreenClick(x, y);
+      return;
+    }
+
+    el.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+      }),
+    );
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      el.focus();
     }
   }
 
@@ -284,6 +604,29 @@ export class App implements AfterViewInit, OnDestroy {
       return;
     }
 
+    if (this.quickSearchOpen()) {
+      if (event.key === '/' && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        this.quickSearch?.focusInput();
+        return;
+      }
+      if (event.key.toLowerCase() === 'e') {
+        event.preventDefault();
+        this.quickSearch?.toggleActiveGroupExpand();
+        return;
+      }
+      if (event.key.toLowerCase() === 'o') {
+        event.preventDefault();
+        this.quickSearch?.toggleHideOthers();
+        return;
+      }
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        this.quickSearch?.cycleTab();
+        return;
+      }
+    }
+
     if (event.key === '/' && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       this.focusSearch();
@@ -299,6 +642,11 @@ export class App implements AfterViewInit, OnDestroy {
       this.mapService.resetView();
     } else if (event.key.toLowerCase() === 'p') {
       this.mapService.togglePinMode();
+    } else if (event.key.toLowerCase() === 'b') {
+      const selected = this.mapService.selectedPoi();
+      if (selected) {
+        this.mapService.togglePoiMark(selected);
+      }
     } else if (event.key === '+' || event.key === '=') {
       this.mapService.zoomBy(1);
     } else if (event.key === '-' || event.key === '_') {
