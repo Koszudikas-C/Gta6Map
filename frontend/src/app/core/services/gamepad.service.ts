@@ -2,6 +2,7 @@ import { Injectable, NgZone, PLATFORM_ID, computed, inject, signal } from '@angu
 import { isPlatformBrowser } from '@angular/common';
 import { GamepadLegendItem } from '../models/hud.models';
 import { MapService } from './map.service';
+import { TelemetryService } from './telemetry.service';
 
 const DEADZONE = 0.15;
 
@@ -30,6 +31,7 @@ export class GamepadService {
   private readonly ngZone = inject(NgZone);
   private readonly platformId = inject(PLATFORM_ID);
   private readonly mapService = inject(MapService);
+  private readonly telemetry = inject(TelemetryService);
 
   private rafId: number | null = null;
   private l3WasPressed = false;
@@ -167,10 +169,17 @@ export class GamepadService {
       const poll = (): void => {
         const pad = this.getActiveGamepad();
         if (pad) {
-          this.updateVirtualCursor(pad);
-          this.updateMapOrbit(pad);
-          this.updateMapZoom(pad);
-          this.processActionButtons(pad);
+          this.telemetry.measure(
+            'gamepad.pollFrame',
+            () => {
+              this.updateVirtualCursor(pad);
+              this.updateMapOrbit(pad);
+              this.updateMapZoom(pad);
+              this.processActionButtons(pad);
+            },
+            undefined,
+            4,
+          );
         }
         this.rafId = requestAnimationFrame(poll);
       };
@@ -203,10 +212,16 @@ export class GamepadService {
     let overControl = this.lastOverControl;
     if (now - this.lastHitTestTime >= 80) {
       this.lastHitTestTime = now;
-      overControl = Boolean(
-        (document.elementFromPoint?.(nextX, nextY) as HTMLElement | null)?.closest(
-          'button, input, textarea, select, a, [role="button"]',
-        ),
+      overControl = this.telemetry.measure(
+        'gamepad.hitTest',
+        () =>
+          Boolean(
+            (document.elementFromPoint?.(nextX, nextY) as HTMLElement | null)?.closest(
+              'button, input, textarea, select, a, [role="button"]',
+            ),
+          ),
+        undefined,
+        4,
       );
       this.lastOverControl = overControl;
     }

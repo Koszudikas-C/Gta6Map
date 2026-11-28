@@ -79,4 +79,88 @@ describe('TelemetryService', () => {
     httpMock.expectOne('/api/telemetry/client-error').flush({ ok: true });
     setItemSpy.mockRestore();
   });
+
+  it('records high-precision method timings with percentiles and rate-limited slow-call events', async () => {
+    service.recordTiming('map.groupOverlappingPois', 1.2345, { count: 10 }, 8);
+    service.recordTiming('map.groupOverlappingPois', 3.4567, { count: 20 }, 8);
+    service.recordTiming('map.groupOverlappingPois', 5.0, { count: 30 }, 8);
+
+    const fastStats = service.getMethodPerfStat('map.groupOverlappingPois');
+    expect(fastStats).not.toBeNull();
+    expect(fastStats!.count).toBe(3);
+    expect(fastStats!.minMs).toBe(1.235);
+    expect(fastStats!.maxMs).toBe(5);
+    expect(fastStats!.p95Ms).toBe(5);
+    expect(fastStats!.slowCount).toBe(0);
+    expect(fastStats!.lastMeta).toEqual({ count: 30 });
+
+    const syncResult = service.measure(
+      'quickSearch.groupedSearchResults',
+      () => ['a', 'b'],
+      (res) => ({ len: res.length }),
+      10,
+    );
+    expect(syncResult).toEqual(['a', 'b']);
+
+    const asyncResult = await service.measureAsync(
+      'map.loadLandmarks',
+      async () => 42,
+      (val) => ({ val }),
+      20,
+    );
+    expect(asyncResult).toBe(42);
+
+    // Slow calls increment slowCount and rate-limit slow_fn capture events within 2000ms cooldown
+    service.recordTiming('native3d.renderScene', 9.5, { frame: 1 }, 6);
+    service.recordTiming('native3d.renderScene', 12.25, { frame: 2 }, 6);
+
+    const slowStats = service.getMethodPerfStat('native3d.renderScene');
+    expect(slowStats!.slowCount).toBe(2);
+
+    const eventsAfterCooldownGate = service.getDevMetrics();
+    const slowEvents1 = eventsAfterCooldownGate.filter((e) => e.message.startsWith('slow_fn:'));
+    expect(slowEvents1).toHaveLength(1);
+    expect(slowEvents1[0].message).toBe('slow_fn:native3d.renderScene:9.5ms');
+
+    jest.advanceTimersByTime(2100);
+    httpMock.expectOne('/api/telemetry/client-error').flush({ ok: true });
+
+    service.recordTiming('native3d.renderScene', 14.0, { frame: 3 }, 6);
+    const slowEvents2 = service
+      .getDevMetrics()
+      .filter((e) => e.message.startsWith('slow_fn:'));
+    expect(slowEvents2).toHaveLength(2);
+
+    jest.advanceTimersByTime(1500);
+    httpMock.expectOne('/api/telemetry/client-error').flush({ ok: true });
+
+    const summary = service.getDevMetricsSummary();
+    expect(summary.trackedMethods).toBeGreaterThanOrEqual(4);
+    expect(summary.totalMethodCalls).toBe(8);
+    expect(summary.totalSlowCalls).toBe(3);
+
+    const exported = JSON.parse(service.exportDevMetricsJson());
+    expect(Array.isArray(exported.methods)).toBe(true);
+    expect(exported.methods.some((m: { name: string }) => m.name === 'native3d.renderScene')).toBe(
+      true,
+    );
+
+    const winPerf = (
+      window as unknown as {
+        __leonidaPerf?: {
+          methods: () => unknown[];
+          method: (n: string) => unknown;
+          slowest: (limit?: number) => unknown[];
+          table: (limit?: number) => unknown[];
+        };
+      }
+    ).__leonidaPerf;
+    expect(winPerf?.methods().length).toBeGreaterThanOrEqual(4);
+    expect(winPerf?.method('map.groupOverlappingPois')).not.toBeNull();
+    expect(winPerf?.slowest(2)).toHaveLength(2);
+
+    service.clearDevMetrics();
+    expect(service.getMethodPerfStats()).toHaveLength(0);
+    expect(service.getDevMetrics()).toHaveLength(0);
+  });
 });

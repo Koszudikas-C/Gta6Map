@@ -27,3 +27,22 @@ export interface ClientTelemetryEvent {
   buildVersion: string;
   timestamp: string;
 }
+
+export type MethodPerfSortKey = 'totalMs' | 'maxMs' | 'p95Ms' | 'avgMs' | 'count';
+
+export interface MethodPerfStats {
+  name: string;
+  count: number;
+  totalMs: number;
+  avgMs: number;
+  minMs: number;
+  maxMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+  lastMs: number;
+  slowCount: number;
+  slowThresholdMs: number;
+  lastMeta?: Record<string, unknown>;
+  lastTimestamp: string;
+}
