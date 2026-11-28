@@ -23,32 +23,32 @@ function getBuildingStyle(poi: LeonidaPoi, seed: number): { color: string; heigh
     case 'Hotéis':
       return {
         color: seed % 2 === 0 ? '#F36A78' : '#FF9B55',
-        height: Math.round(95000 + factor * 135000),
+        height: Math.round(480 + factor * 620),
       };
     case 'Pontos-Chave':
       return {
         color: seed % 2 === 0 ? '#C9349B' : '#7B208F',
-        height: Math.round(70000 + factor * 130000),
+        height: Math.round(350 + factor * 600),
       };
     case 'Acessíveis':
       return {
         color: '#4CE0D2',
-        height: Math.round(55000 + factor * 85000),
+        height: Math.round(280 + factor * 420),
       };
     case 'Lojas':
       return {
         color: '#FFB458',
-        height: Math.round(35000 + factor * 55000),
+        height: Math.round(180 + factor * 270),
       };
     case 'Eventos':
       return {
         color: '#F44E8F',
-        height: Math.round(45000 + factor * 65000),
+        height: Math.round(240 + factor * 320),
       };
     default:
       return {
         color: '#64748B',
-        height: Math.round(35000 + factor * 50000),
+        height: Math.round(180 + factor * 240),
       };
   }
 }
@@ -72,8 +72,8 @@ export function buildLeonida3DBuildings(pois: LeonidaPoi[]): GeoJsonFeatureColle
     type: 'FeatureCollection',
     features: candidates.map((poi) => {
       const seed = hashString(poi.id + poi.name);
-      const halfLng = 0.28 + ((seed % 31) / 100);
-      const aspect = 0.75 + (((seed >>> 8) % 51) / 100);
+      const halfLng = 0.0012 + (seed % 31) / 25000;
+      const aspect = 0.75 + ((seed >>> 8) % 51) / 100;
       const cosLat = Math.max(0.35, Math.cos((poi.lat * Math.PI) / 180));
       const halfLat = halfLng * cosLat * aspect;
       const { color, height } = getBuildingStyle(poi, seed);
