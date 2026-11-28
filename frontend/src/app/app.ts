@@ -4,17 +4,23 @@ import {
   Component,
   ElementRef,
   HostListener,
+  NgZone,
   OnDestroy,
   PLATFORM_ID,
   ViewChild,
+  computed,
+  effect,
   inject,
   signal,
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import {
   Box,
+  ChevronLeft,
+  ChevronRight,
   Compass,
   Crosshair,
+  Eye,
   EyeOff,
   Gamepad2,
   Layers,
@@ -22,8 +28,11 @@ import {
   MapPin,
   Maximize2,
   Minus,
+  Pin,
+  PinOff,
   Plus,
   Search,
+  X,
   LucideAngularModule,
 } from 'lucide-angular';
 import { LeonidaPoi, POI_CATEGORIES } from './core/data/leonida-map.data';
@@ -59,6 +68,13 @@ export class App implements AfterViewInit, OnDestroy {
   readonly gamepadService = inject(GamepadService);
   readonly platform = inject(PlatformContextService);
   private readonly platformId = inject(PLATFORM_ID);
+  private readonly ngZone = inject(NgZone);
+
+  constructor() {
+    effect(() => {
+      this.mapService.setLiveCoordinatesEnabled(this.sidebarOpen());
+    });
+  }
 
   @ViewChild('mapContainer', { static: true })
   private readonly mapContainer!: ElementRef<HTMLDivElement>;
@@ -82,15 +98,51 @@ export class App implements AfterViewInit, OnDestroy {
     typeof localStorage !== 'undefined' && localStorage.getItem('leonida_qs_hide_others') === 'true',
   );
   readonly searchQuery = signal('');
+  readonly sidebarPinned = signal(false);
+  readonly sidebarSearchIndex = signal(-1);
+  readonly legendHoldProgress = signal(0);
+  private legendHoldRaf: number | null = null;
+  private legendHoldStart = 0;
+  private readonly legendHoldDurationMs = 550;
   readonly clickBursts = signal<{ id: number; x: number; y: number }[]>([]);
   private burstId = 0;
   readonly quickCategories = POI_CATEGORIES;
   readonly selectedCategory = signal<string>('Todas');
+  readonly sidebarSearchResults = computed(() => {
+    const q = this.searchQuery().trim();
+    return q ? this.mapService.searchPoisFast(q, this.selectedCategory(), 12) : [];
+  });
+  readonly legendItems = computed<
+    ReadonlyArray<{ category: string; meaning: string; count: number }>
+  >(() => {
+    const dynamicGroups = this.mapService.groupedPoisByCategory();
+    return [
+      {
+        category: 'Todas',
+        meaning: 'Exibir todos os pontos no mapa',
+        count: this.mapService.totalPoisCount(),
+      },
+      ...dynamicGroups.map((group) => ({
+        category: group.category,
+        meaning: this.getCategoryMeaning(group.category),
+        count: group.items.length,
+      })),
+      { category: 'Ocultos', meaning: 'Ocultar pontos de referência', count: 0 },
+    ];
+  });
+  readonly activeLegendItem = computed(
+    () =>
+      this.legendItems().find((item) => item.category === this.selectedCategory()) ??
+      this.legendItems()[0],
+  );
 
   readonly icons = {
     Box,
+    ChevronLeft,
+    ChevronRight,
     Compass,
     Crosshair,
+    Eye,
     EyeOff,
     Gamepad2,
     Layers,
@@ -98,8 +150,11 @@ export class App implements AfterViewInit, OnDestroy {
     MapPin,
     Maximize2,
     Minus,
+    Pin,
+    PinOff,
     Plus,
     Search,
+    X,
   };
 
   ngAfterViewInit(): void {
@@ -123,24 +178,35 @@ export class App implements AfterViewInit, OnDestroy {
       onStepFocus: (dir) => this.stepGamepadFocus(dir),
       onCursorClick: (x, y) => this.triggerGamepadClick(x, y),
     });
+    if (isPlatformBrowser(this.platformId)) {
+      this.ngZone.runOutsideAngular(() => {
+        window.addEventListener('pointermove', this.onWindowPointerMove, { passive: true });
+      });
+    }
   }
 
   ngOnDestroy(): void {
+    this.cancelLegendHold();
+    if (isPlatformBrowser(this.platformId)) {
+      window.removeEventListener('pointermove', this.onWindowPointerMove);
+    }
     this.gamepadService.destroy();
     this.mapService.destroy();
   }
 
   toggleSidebar(): void {
     if (this.quickSearchOpen()) {
-      this.quickSearch?.cycleTab();
-      return;
-    }
-    if (this.activePanel() !== null) {
-      this.activePanel.set(null);
-      this.sidebarOpen.set(false);
-      return;
+      this.quickSearchOpen.set(false);
     }
     this.wheelOpen.update((v) => !v);
+  }
+
+  toggleSidebarPin(): void {
+    const next = !this.sidebarPinned();
+    this.sidebarPinned.set(next);
+    if (next && !this.sidebarOpen()) {
+      this.sidebarOpen.set(true);
+    }
   }
 
   onWheelSelect(action: WheelAction): void {
@@ -209,7 +275,7 @@ export class App implements AfterViewInit, OnDestroy {
       this.quickSearchOpen.set(false);
     } else if (this.mapService.selectedPoi()) {
       this.mapService.selectedPoi.set(null);
-    } else if (this.sidebarOpen() || this.activePanel() !== null) {
+    } else if ((this.sidebarOpen() || this.activePanel() !== null) && !this.sidebarPinned()) {
       this.activePanel.set(null);
       this.sidebarOpen.set(false);
     } else {
@@ -467,8 +533,60 @@ export class App implements AfterViewInit, OnDestroy {
 
   onSearchInput(event: Event): void {
     const target = event.target as HTMLInputElement;
+    this.sidebarSearchIndex.set(-1);
     this.searchQuery.set(target.value);
     this.mapService.filterPois(target.value, this.selectedCategory());
+  }
+
+  clearSidebarSearch(): void {
+    this.sidebarSearchIndex.set(-1);
+    this.searchQuery.set('');
+    this.mapService.filterPois('', this.selectedCategory());
+    setTimeout(() => this.searchInput?.nativeElement.focus(), 0);
+  }
+
+  onSidebarSearchKeyDown(event: KeyboardEvent): void {
+    const results = this.sidebarSearchResults();
+    if (event.key === 'ArrowDown') {
+      if (results.length === 0) return;
+      event.preventDefault();
+      this.sidebarSearchIndex.update((i) => (i + 1) % results.length);
+      if (typeof document !== 'undefined') {
+        setTimeout(() => {
+          document
+            .querySelector('.hud-sidebar .sidebar-search-item.is-highlighted')
+            ?.scrollIntoView({ block: 'nearest' });
+        }, 0);
+      }
+    } else if (event.key === 'ArrowUp') {
+      if (results.length === 0) return;
+      event.preventDefault();
+      this.sidebarSearchIndex.update((i) => (i <= 0 ? results.length - 1 : i - 1));
+      if (typeof document !== 'undefined') {
+        setTimeout(() => {
+          document
+            .querySelector('.hud-sidebar .sidebar-search-item.is-highlighted')
+            ?.scrollIntoView({ block: 'nearest' });
+        }, 0);
+      }
+    } else if (event.key === 'Enter') {
+      if (results.length === 0) return;
+      event.preventDefault();
+      const idx = this.sidebarSearchIndex();
+      const target = idx >= 0 && idx < results.length ? results[idx] : results[0];
+      this.selectSidebarSearchResult(target);
+    } else if (event.key === 'Escape' && this.searchQuery().length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.clearSidebarSearch();
+    }
+  }
+
+  selectSidebarSearchResult(poi: LeonidaPoi): void {
+    this.mapService.flyToPoi(poi, true);
+    if (!this.sidebarPinned()) {
+      this.sidebarOpen.set(false);
+    }
   }
 
   onQuickSearchQuery(value: string): void {
@@ -494,9 +612,57 @@ export class App implements AfterViewInit, OnDestroy {
     this.mapService.filterPois(this.searchQuery(), category);
   }
 
+  cyclePoiCategoryVisibility(delta: 1 | -1 = 1): void {
+    const order = this.legendItems().map((item) => item.category);
+    const currentIdx = order.indexOf(this.selectedCategory());
+    const safeIdx = currentIdx >= 0 ? currentIdx : 0;
+    const nextCategory = order[(safeIdx + delta + order.length) % order.length];
+    this.selectCategory(nextCategory);
+  }
+
+  private getCategoryMeaning(category: string): string {
+    const norm = category
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase();
+    const meanings: Record<string, string> = {
+      'bares, cafes e lazer': 'Vida noturna, bares e cafés',
+      'cartas colecionaveis': 'Cartas colecionáveis no mapa',
+      'lojas e comercio': 'Comércios, lojas e serviços',
+      lojas: 'Comércios, lojas e serviços',
+      'missoes da historia': 'Missões principais da campanha',
+      'veiculos e oficinas': 'Garagens, oficinas e veículos',
+      'pontos de referencia': 'Marcos, praias e pontos turísticos',
+      'pontos-chave': 'Marcos, praias e pontos turísticos',
+      'easter eggs': 'Segredos e referências ocultas',
+      'transporte, aeroportos e marinas': 'Aeroportos, portos e estações',
+      transporte: 'Aeroportos, portos e estações',
+      'missoes secundarias': 'Atividades e missões extras',
+      'revistas colecionaveis': 'Revistas colecionáveis no mapa',
+      'hoteis e resorts': 'Hotéis, resorts e hospedagens',
+      hoteis: 'Hotéis, resorts e hospedagens',
+      'bancos e financeiras': 'Agências bancárias e cofres',
+      'fragmentos de meteorito': 'Fragmentos raros de meteorito',
+      'monumentos waink': 'Monumentos e estátuas locais',
+      'servicos e bem-estar': 'Clínicas, saúde e bem-estar',
+      'policia e bombeiros': 'Delegacias e quartéis',
+      flamingos: 'Avistamentos e colecionáveis',
+      'crimes e assaltos': 'Ocorrências e alvos de assalto',
+      'pontos de meditacao': 'Áreas de meditação e descanso',
+      armas: 'Lojas e pontos de armamento',
+      'armas unicas': 'Armas raras e especiais',
+      esconderijos: 'Abrigos e safehouses',
+      acessiveis: 'Locais e entradas acessíveis',
+      eventos: 'Eventos, shows e atividades',
+      natureza: 'Parques, trilhas e reservas',
+    };
+    return meanings[norm] ?? 'Pontos desta categoria no mapa';
+  }
+
   @HostListener('document:click', ['$event'])
   onDocumentClick(event: MouseEvent): void {
-    if (!this.sidebarOpen()) {
+    if (!this.sidebarOpen() || this.sidebarPinned()) {
       return;
     }
     const target = event.target as HTMLElement | null;
@@ -562,6 +728,20 @@ export class App implements AfterViewInit, OnDestroy {
     }
   }
 
+  private readonly onWindowPointerMove = (event: PointerEvent): void => {
+    if (!this.gamepadService.connected() || event.pointerType !== 'mouse') {
+      return;
+    }
+    const overControl = Boolean(
+      (event.target as HTMLElement | null)?.closest(
+        'button, input, textarea, select, a, [role="button"]',
+      ),
+    );
+    this.ngZone.run(() => {
+      this.gamepadService.setCursorPosition(event.clientX, event.clientY, overControl);
+    });
+  };
+
   @HostListener('window:pointerdown', ['$event'])
   onPointerDown(event: PointerEvent): void {
     this.spawnBurst(event.clientX, event.clientY);
@@ -593,7 +773,7 @@ export class App implements AfterViewInit, OnDestroy {
         this.quickSearchOpen.set(false);
       } else if (isInput) {
         (event.target as HTMLElement).blur();
-      } else {
+      } else if (!this.sidebarPinned()) {
         this.activePanel.set(null);
         this.sidebarOpen.set(false);
       }
@@ -625,6 +805,17 @@ export class App implements AfterViewInit, OnDestroy {
         this.quickSearch?.cycleTab();
         return;
       }
+      if (
+        (event.key === 'ArrowDown' ||
+          event.key === 'ArrowUp' ||
+          event.key === 'ArrowLeft' ||
+          event.key === 'ArrowRight' ||
+          event.key === 'Enter') &&
+        !(event.target as HTMLElement | null)?.closest('.quick-search-bar')
+      ) {
+        this.quickSearch?.onKeyDown(event);
+        return;
+      }
     }
 
     if (event.key === '/' && !event.ctrlKey && !event.metaKey) {
@@ -632,6 +823,19 @@ export class App implements AfterViewInit, OnDestroy {
       this.focusSearch();
     } else if (event.key.toLowerCase() === 'm') {
       this.toggleSidebar();
+    } else if (event.key.toLowerCase() === 't') {
+      this.toggleSidebarPin();
+    } else if (event.key.toLowerCase() === 'l') {
+      if (event.repeat) {
+        return;
+      }
+      this.cyclePoiCategoryVisibility(1);
+      this.startLegendHold();
+    } else if (event.key.toLowerCase() === 'k') {
+      const copyBtn = document.querySelector(
+        '.leonida-pin-popup .leonida-pin-copy-btn',
+      ) as HTMLButtonElement | null;
+      copyBtn?.click();
     } else if (event.key.toLowerCase() === 'h') {
       this.toggleCinemaMode();
     } else if (event.key.toLowerCase() === 'f') {
@@ -651,6 +855,48 @@ export class App implements AfterViewInit, OnDestroy {
       this.mapService.zoomBy(1);
     } else if (event.key === '-' || event.key === '_') {
       this.mapService.zoomBy(-1);
+    }
+  }
+
+  @HostListener('window:keyup', ['$event'])
+  onKeyUp(event: KeyboardEvent): void {
+    if (event.key.toLowerCase() === 'l') {
+      this.cancelLegendHold();
+    }
+  }
+
+  @HostListener('window:blur')
+  onWindowBlur(): void {
+    this.cancelLegendHold();
+  }
+
+  private startLegendHold(): void {
+    if (!isPlatformBrowser(this.platformId)) {
+      return;
+    }
+    this.cancelLegendHold();
+    this.legendHoldStart = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - this.legendHoldStart) / this.legendHoldDurationMs);
+      this.legendHoldProgress.set(progress);
+      if (progress >= 1) {
+        this.legendHoldRaf = null;
+        this.legendHoldProgress.set(0);
+        this.selectCategory('Todas');
+        return;
+      }
+      this.legendHoldRaf = requestAnimationFrame(tick);
+    };
+    this.legendHoldRaf = requestAnimationFrame(tick);
+  }
+
+  private cancelLegendHold(): void {
+    if (this.legendHoldRaf !== null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this.legendHoldRaf);
+    }
+    this.legendHoldRaf = null;
+    if (this.legendHoldProgress() !== 0) {
+      this.legendHoldProgress.set(0);
     }
   }
 }

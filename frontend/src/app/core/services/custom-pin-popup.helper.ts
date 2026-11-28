@@ -89,6 +89,7 @@ export function createCustomPinPopupContent(
   callbacks: CustomPinPopupCallbacks,
 ): HTMLElement {
   const container = document.createElement('div');
+  container.className = 'leonida-pin-popup';
   container.style.cssText =
     'font-family: inherit; width: 224px; color: #f8fafc; background: rgba(18, 11, 30, 0.94); border: 1px solid rgba(255, 79, 216, 0.45); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);';
   container.addEventListener('click', (e) => e.stopPropagation());
@@ -141,9 +142,46 @@ export function createCustomPinPopupContent(
     iconsRow.appendChild(iconBtn);
   }
 
-  const coords = document.createElement('div');
-  coords.style.cssText = 'font-size: 10px; opacity: 0.7;';
+  const coordsRow = document.createElement('div');
+  coordsRow.style.cssText =
+    'display: flex; align-items: center; justify-content: space-between; gap: 6px;';
+
+  const coords = document.createElement('span');
+  coords.className = 'leonida-pin-coords';
+  coords.style.cssText = 'font-size: 10px; opacity: 0.78; font-variant-numeric: tabular-nums;';
   coords.textContent = `${pin.lng.toFixed(3)}, ${pin.lat.toFixed(3)}`;
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'leonida-pin-copy-btn';
+  copyBtn.title = 'Copiar localização (K)';
+  copyBtn.setAttribute('aria-label', 'Copiar localização');
+  copyBtn.style.cssText =
+    'display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 5px; border: 1px solid rgba(76, 224, 210, 0.45); background: rgba(76, 224, 210, 0.12); color: #4CE0D2; font-size: 10px; font-weight: 700; cursor: pointer;';
+
+  const copyIconSvg = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+  const checkIconSvg = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
+  const kbdHtml = `<kbd style="padding: 1px 4px; border-radius: 3px; border: 1px solid rgba(76, 224, 210, 0.45); background: rgba(18, 11, 30, 0.8); font-size: 9px; font-family: inherit;">K</kbd>`;
+
+  copyBtn.innerHTML = `${copyIconSvg}${kbdHtml}`;
+
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const text = coords.textContent ?? '';
+    void copyTextToClipboard(text);
+    copyBtn.classList.add('is-copied');
+    copyBtn.innerHTML = `${checkIconSvg}<span>Copiado</span>`;
+    if (resetTimer !== null) {
+      clearTimeout(resetTimer);
+    }
+    resetTimer = setTimeout(() => {
+      copyBtn.classList.remove('is-copied');
+      copyBtn.innerHTML = `${copyIconSvg}${kbdHtml}`;
+    }, 1500);
+  });
+
+  coordsRow.append(coords, copyBtn);
 
   const removeBtn = document.createElement('button');
   removeBtn.type = 'button';
@@ -156,6 +194,40 @@ export function createCustomPinPopupContent(
     callbacks.onRemove();
   });
 
-  container.append(header, titleInput, notesInput, colorsRow, iconsRow, coords, removeBtn);
+  container.append(header, titleInput, notesInput, colorsRow, iconsRow, coordsRow, removeBtn);
   return container;
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fallback for non-secure HTTP origins (e.g. LAN IP)
+    }
+  }
+  if (typeof document === 'undefined' || !document.body) {
+    return false;
+  }
+  const prevFocused = document.activeElement as HTMLElement | null;
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.cssText =
+    'position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none;';
+  document.body.appendChild(textarea);
+  textarea.focus({ preventScroll: true });
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  let copied = false;
+  try {
+    copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+  } catch {
+    copied = false;
+  } finally {
+    textarea.remove();
+    prevFocused?.focus?.({ preventScroll: true });
+  }
+  return copied;
 }

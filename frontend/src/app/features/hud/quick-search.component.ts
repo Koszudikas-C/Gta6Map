@@ -75,11 +75,19 @@ function loadPoiHits(): Record<string, number> {
   imports: [LucideAngularModule, PoiBlipIconComponent, ShortcutKeyBadgeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (isOpen()) {
-      <div class="quick-search-bar" role="search" aria-label="Busca rápida">
+    <div class="quick-search-stage">
+      <div
+        class="quick-search-bar"
+        [class.is-collapsed]="!isOpen()"
+        [attr.aria-hidden]="!isOpen()"
+        (keydown)="onKeyDown($event)"
+        role="search"
+        aria-label="Busca rápida"
+      >
         <div class="qs-watermark" aria-hidden="true">VI</div>
 
-        <div class="qs-input-box">
+        <div class="qs-fold qs-fold-1">
+          <div class="qs-input-box">
           <lucide-icon [img]="icons.Search" [size]="16" [strokeWidth]="1.85" class="qs-search-icon" />
           <input
             #quickSearchInput
@@ -88,7 +96,6 @@ function loadPoiHits(): Record<string, number> {
             [placeholder]="placeholder()"
             [value]="query()"
             (input)="onInput($event)"
-            (keydown)="onKeyDown($event)"
             aria-label="Buscar pontos de interesse"
           />
           @if (query().length > 0) {
@@ -137,7 +144,9 @@ function loadPoiHits(): Record<string, number> {
             </button>
           </div>
         </div>
+        </div>
 
+        <div class="qs-fold qs-fold-2">
         @if (query().trim().length > 0) {
           <div class="qs-meta-bar">
             <span>{{ searchResults().length }} resultado(s)</span>
@@ -425,8 +434,10 @@ function loadPoiHits(): Record<string, number> {
             </div>
           }
         }
+        </div>
 
-        <div class="qs-footer">
+        <div class="qs-fold qs-fold-3">
+          <div class="qs-footer">
           <div class="qs-footer-hints">
             @if (platform.isMobile()) {
               <span>Toque para selecionar</span>
@@ -454,30 +465,153 @@ function loadPoiHits(): Record<string, number> {
             }
           </div>
           <span class="qs-footer-total">{{ totalPoisCount() }} locais</span>
+          </div>
         </div>
       </div>
-    }
+    </div>
   `,
   styles: [
     `
-      .quick-search-bar {
+      .quick-search-stage {
         position: fixed;
         top: 16px;
         left: 50%;
         transform: translateX(-50%);
         width: min(468px, calc(100dvw - 120px));
-        padding: 12px;
+        z-index: 40;
+        perspective: 1150px;
+        perspective-origin: 50% 0%;
+        pointer-events: none;
+      }
+
+      .quick-search-bar {
+        box-sizing: border-box;
+        position: relative;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        padding: 0;
         border-radius: 16px;
         background: radial-gradient(circle at 50% 0%, rgba(34, 21, 58, 0.96) 0%, rgba(16, 10, 28, 0.96) 100%);
-        backdrop-filter: blur(18px) saturate(140%);
-        -webkit-backdrop-filter: blur(18px) saturate(140%);
         border: 2px solid #7b208f;
         box-shadow: 0 22px 54px rgba(0, 0, 0, 0.78), 0 0 34px rgba(123, 32, 143, 0.45);
         overflow: hidden;
-        z-index: 40;
+        transform-style: flat;
+        transform-origin: top center;
+        backface-visibility: hidden;
+        transform: none;
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transition:
+          transform 320ms cubic-bezier(0.22, 1.12, 0.36, 1),
+          opacity 200ms ease,
+          visibility 0s linear 0ms;
+      }
+
+      .qs-fold {
+        box-sizing: border-box;
+        position: relative;
+        width: 100%;
+        min-width: 0;
+        z-index: 1;
+        padding: 12px;
+        overflow: hidden;
+        transform-origin: top center;
+        backface-visibility: hidden;
+      }
+
+      .qs-fold::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+        background: linear-gradient(180deg, rgba(6, 3, 14, 0.55) 0%, rgba(6, 3, 14, 0.12) 100%);
+        opacity: 0;
+        transition: opacity 280ms ease;
+        z-index: 2;
+      }
+
+      .quick-search-bar.is-collapsed .qs-fold::before {
+        opacity: 1;
+      }
+
+      .qs-fold-1 {
+        border-radius: 14px 14px 0 0;
+        transform: none;
+        opacity: 1;
+        transition:
+          transform 340ms cubic-bezier(0.22, 1.08, 0.36, 1) 40ms,
+          opacity 200ms ease 40ms;
+      }
+
+      .qs-fold-2 {
+        padding-top: 10px;
+        border-radius: 0;
+        border-top: 1px solid rgba(255, 166, 107, 0.16);
+        box-shadow: inset 0 6px 10px -8px rgba(0, 0, 0, 0.65);
+        transform: none;
+        opacity: 1;
+        transition:
+          transform 380ms cubic-bezier(0.22, 1.12, 0.36, 1) 130ms,
+          opacity 220ms ease 110ms;
+      }
+
+      .qs-fold-3 {
+        padding: 10px 12px;
+        border-radius: 0 0 14px 14px;
+        border-top: 1px solid rgba(255, 166, 107, 0.16);
+        box-shadow: inset 0 6px 10px -8px rgba(0, 0, 0, 0.65);
+        transform: none;
+        opacity: 1;
+        transition:
+          transform 400ms cubic-bezier(0.22, 1.14, 0.36, 1) 210ms,
+          opacity 240ms ease 180ms;
+      }
+
+      .quick-search-bar.is-collapsed .qs-fold-3 {
+        transform: rotateX(-105deg) translateY(-100%);
+        opacity: 0;
+        transition:
+          transform 200ms ease-in 0ms,
+          opacity 160ms ease 40ms;
+      }
+
+      .quick-search-bar.is-collapsed .qs-fold-2 {
+        transform: rotateX(105deg) translateY(-100%);
+        opacity: 0;
+        transition:
+          transform 200ms ease-in 80ms,
+          opacity 160ms ease 110ms;
+      }
+
+      .quick-search-bar.is-collapsed .qs-fold-1 {
+        transform: rotateX(-85deg);
+        opacity: 0;
+        transition:
+          transform 200ms ease-in 150ms,
+          opacity 160ms ease 170ms;
+      }
+
+      .quick-search-bar:not(.is-collapsed) {
         animation:
-          quickSearchDrop 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards,
+          quickSearchDrop 280ms cubic-bezier(0.22, 1.12, 0.36, 1) forwards,
           gtaSearchGlow 8s ease-in-out infinite;
+      }
+
+      .quick-search-bar.is-collapsed {
+        transform-style: preserve-3d;
+        transform: rotateX(-68deg) translateY(-14px) scale(0.92);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        animation: none;
+        transition:
+          transform 220ms cubic-bezier(0.55, 0, 0.8, 0.35),
+          opacity 180ms ease 40ms,
+          visibility 0s linear 220ms;
       }
 
       @keyframes gtaSearchGlow {
@@ -1060,9 +1194,9 @@ function loadPoiHits(): Record<string, number> {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-top: 10px;
-        padding-top: 8px;
-        border-top: 1px solid rgba(255, 246, 248, 0.08);
+        margin-top: 0;
+        padding-top: 0;
+        border-top: none;
         font-size: 10px;
         font-weight: 600;
         color: rgba(255, 246, 248, 0.46);
@@ -1089,16 +1223,24 @@ function loadPoiHits(): Record<string, number> {
       @keyframes quickSearchDrop {
         from {
           opacity: 0;
-          transform: translate(-50%, -10px);
+          transform: rotateX(-68deg) translateY(-10px) scale(0.94);
         }
         to {
           opacity: 1;
-          transform: translate(-50%, 0);
+          transform: none;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .quick-search-bar,
+        .quick-search-bar.is-collapsed {
+          transition: opacity 150ms ease !important;
+          animation: none !important;
         }
       }
 
       @media (max-width: 767px) {
-        .quick-search-bar {
+        .quick-search-stage {
           top: 68px;
           width: min(360px, calc(100dvw - 24px));
         }
@@ -1322,10 +1464,31 @@ export class QuickSearchComponent {
   }
 
   toggleCategoryExpand(category: string): void {
+    const willCollapse = Boolean(this.expandedCategories()[category]);
     this.expandedCategories.update((state) => ({
       ...state,
       [category]: !state[category],
     }));
+    if (willCollapse && typeof document !== 'undefined') {
+      setTimeout(() => {
+        const group = Array.from(document.querySelectorAll('.quick-search-bar .qs-group')).find(
+          (el) => el.getAttribute('data-category') === category,
+        );
+        const items = group?.querySelectorAll<HTMLElement>('.qs-item');
+        const lastItem = items && items.length > 0 ? items[items.length - 1] : null;
+        if (!lastItem) {
+          return;
+        }
+        for (const prev of Array.from(document.querySelectorAll('.gamepad-focus'))) {
+          prev.classList.remove('gamepad-focus');
+        }
+        if (this.platform.isConsole()) {
+          lastItem.classList.add('gamepad-focus');
+        }
+        lastItem.focus({ preventScroll: false });
+        lastItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }, 0);
+    }
   }
 
   isPoiHighlighted(poi: LeonidaPoi): boolean {
@@ -1355,11 +1518,23 @@ export class QuickSearchComponent {
       if (items.length === 0) return;
       event.preventDefault();
       this.highlightedIndex.update((i) => (i + 1) % items.length);
+      this.scrollHighlightedItemIntoView();
     } else if (event.key === 'ArrowUp') {
       if (items.length === 0) return;
       event.preventDefault();
       this.highlightedIndex.update((i) => (i <= 0 ? items.length - 1 : i - 1));
+      this.scrollHighlightedItemIntoView();
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      const isInputWithText =
+        event.target instanceof HTMLInputElement && event.target.value.length > 0;
+      if (!isInputWithText && this.query().trim().length === 0 && this.activeTab() === 'categories') {
+        event.preventDefault();
+        this.scrollCategories(event.key === 'ArrowLeft' ? -1 : 1);
+      }
     } else if (event.key === 'Enter') {
+      if (event.target instanceof HTMLButtonElement && this.highlightedIndex() < 0) {
+        return;
+      }
       if (items.length === 0) return;
       event.preventDefault();
       const idx = this.highlightedIndex();
@@ -1369,6 +1544,17 @@ export class QuickSearchComponent {
       event.preventDefault();
       this.closeSearch.emit();
     }
+  }
+
+  private scrollHighlightedItemIntoView(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    setTimeout(() => {
+      document
+        .querySelector('.quick-search-bar .qs-item.is-highlighted')
+        ?.scrollIntoView({ block: 'nearest' });
+    }, 0);
   }
 
   choosePoi(poi: LeonidaPoi): void {

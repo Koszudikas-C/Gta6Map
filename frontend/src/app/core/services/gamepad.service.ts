@@ -53,6 +53,8 @@ export class GamepadService {
   };
   private cinemaWasPressed = false;
   private actions: GamepadActions = {};
+  private lastHitTestTime = 0;
+  private lastOverControl = false;
 
   readonly connected = signal(false);
   readonly controllerName = signal<string | null>(null);
@@ -166,6 +168,7 @@ export class GamepadService {
         const pad = this.getActiveGamepad();
         if (pad) {
           this.updateVirtualCursor(pad);
+          this.updateMapOrbit(pad);
           this.updateMapZoom(pad);
           this.processActionButtons(pad);
         }
@@ -196,11 +199,17 @@ export class GamepadService {
     const nextX = Math.max(0, Math.min(maxW, this.cursorX() + stepX));
     const nextY = Math.max(0, Math.min(maxH, this.cursorY() + stepY));
 
-    const overControl = Boolean(
-      (document.elementFromPoint?.(nextX, nextY) as HTMLElement | null)?.closest(
-        'button, input, textarea, select, a, [role="button"]',
-      ),
-    );
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    let overControl = this.lastOverControl;
+    if (now - this.lastHitTestTime >= 80) {
+      this.lastHitTestTime = now;
+      overControl = Boolean(
+        (document.elementFromPoint?.(nextX, nextY) as HTMLElement | null)?.closest(
+          'button, input, textarea, select, a, [role="button"]',
+        ),
+      );
+      this.lastOverControl = overControl;
+    }
 
     if (nextX !== this.cursorX() || nextY !== this.cursorY() || overControl !== this.cursorHidden()) {
       this.ngZone.run(() => {
@@ -224,18 +233,28 @@ export class GamepadService {
     }
   }
 
+  private updateMapOrbit(pad: Gamepad): void {
+    if (this.actions.isModalOpen?.()) {
+      return;
+    }
+    const rightStickX = pad.axes[2] ?? 0;
+    const rightStickY = pad.axes[3] ?? 0;
+    const bearingDelta = Math.abs(rightStickX) > DEADZONE ? rightStickX * 2.2 : 0;
+    const pitchDelta = Math.abs(rightStickY) > DEADZONE ? -rightStickY * 1.4 : 0;
+    if (bearingDelta !== 0 || pitchDelta !== 0) {
+      this.mapService.orbitCameraBy(bearingDelta, pitchDelta);
+    }
+  }
+
   private updateMapZoom(pad: Gamepad): void {
     if (this.actions.isModalOpen?.()) {
       return;
     }
-    const rightStickY = pad.axes[3] ?? 0;
     const l2Value = pad.buttons[6]?.value || (pad.buttons[6]?.pressed ? 1 : 0);
     const r2Value = pad.buttons[7]?.value || (pad.buttons[7]?.pressed ? 1 : 0);
 
     if (r2Value > DEADZONE || l2Value > DEADZONE) {
       this.mapService.zoomImmediateBy((r2Value - l2Value) * 0.045);
-    } else if (Math.abs(rightStickY) > 0.2) {
-      this.mapService.zoomImmediateBy(-rightStickY * 0.045);
     }
   }
 
@@ -352,6 +371,7 @@ export class GamepadService {
     if (!isPlatformBrowser(this.platformId)) {
       return;
     }
+    this.lastOverControl = hideOverControl;
     this.cursorX.set(Math.max(0, Math.min(window.innerWidth, x)));
     this.cursorY.set(Math.max(0, Math.min(window.innerHeight, y)));
     this.cursorHidden.set(hideOverControl);

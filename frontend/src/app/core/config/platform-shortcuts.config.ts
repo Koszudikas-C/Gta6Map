@@ -18,7 +18,10 @@ export type PlatformShortcutId =
   | 'toggleMapMode'
   | 'cycleSearchTab'
   | 'scrollCatPrev'
-  | 'scrollCatNext';
+  | 'scrollCatNext'
+  | 'pinPanel'
+  | 'cyclePoiVisibility'
+  | 'copyCoords';
 
 export interface ConsoleShortcutSpec {
   playstation: string;
@@ -126,6 +129,21 @@ export const PLATFORM_SHORTCUTS = {
     desktop: '→',
     mobile: null,
     console: { playstation: 'R2', xbox: 'RT', generic: 'R2/RT' },
+  },
+  pinPanel: {
+    desktop: 'T',
+    mobile: null,
+    console: { playstation: 'L3', xbox: 'LS', generic: 'L3/LS' },
+  },
+  cyclePoiVisibility: {
+    desktop: 'L',
+    mobile: null,
+    console: { playstation: 'Touchpad', xbox: 'View', generic: 'Select' },
+  },
+  copyCoords: {
+    desktop: 'K',
+    mobile: null,
+    console: { playstation: '△', xbox: 'Y', generic: 'Y/△' },
   },
 } as const satisfies Record<PlatformShortcutId, PlatformShortcutSpec>;
 

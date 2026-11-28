@@ -189,8 +189,7 @@ export type { WheelAction };
         position: fixed;
         inset: 0;
         z-index: 35;
-        background: rgba(18, 11, 30, 0.45);
-        backdrop-filter: blur(4px);
+        background: rgba(14, 8, 26, 0.62);
       }
 
       .weapon-wheel {
@@ -205,8 +204,9 @@ export type { WheelAction };
         background: radial-gradient(circle, rgba(28, 18, 48, 0.94) 36%, rgba(18, 11, 30, 0.88) 100%);
         border: 2px solid #7B208F;
         box-shadow: 0 0 36px rgba(123, 32, 143, 0.45);
+        transform-origin: top center;
         animation:
-          wheelPop 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards,
+          wheelPop 260ms cubic-bezier(0.22, 1.12, 0.36, 1) forwards,
           gtaWheelGlow 8s ease-in-out infinite;
       }
 
@@ -236,7 +236,7 @@ export type { WheelAction };
       @keyframes wheelPop {
         from {
           opacity: 0;
-          transform: translate(-50%, -50%) scale(0.84);
+          transform: translate(-50%, -50%) perspective(1150px) rotateX(-55deg) scale(0.84);
         }
         to {
           opacity: 1;
@@ -411,23 +411,37 @@ export type { WheelAction };
       .fan-5 { transform: translate(-158px, -88px); animation-delay: 140ms; }
       .fan-6 { transform: translate(158px, -88px); animation-delay: 170ms; }
 
+      @keyframes pinSubmenuIn {
+        from {
+          opacity: 0;
+          transform: translate(202px, -142px) perspective(1150px) rotateX(-68deg) scale(0.92);
+        }
+        to {
+          opacity: 1;
+          transform: translate(202px, -142px);
+        }
+      }
+
       .pin-submenu {
         pointer-events: auto;
         position: absolute;
         top: 50%;
         left: 50%;
         transform: translate(202px, -142px);
+        transform-origin: top center;
         display: flex;
         flex-direction: column;
         gap: 8px;
         padding: 10px;
         min-width: 176px;
         border-radius: 12px;
-        background: rgba(18, 11, 30, 0.95);
-        backdrop-filter: blur(8px);
+        background: rgba(22, 13, 38, 0.96);
         border: 1px solid rgba(255, 79, 216, 0.5);
         box-shadow: 0 12px 28px rgba(0, 0, 0, 0.72), 0 0 16px rgba(255, 79, 216, 0.14);
         z-index: 60;
+        animation:
+          pinSubmenuIn 260ms cubic-bezier(0.22, 1.12, 0.36, 1) forwards,
+          gtaWheelGlow 8s ease-in-out infinite;
       }
 
       .pin-submenu::before {

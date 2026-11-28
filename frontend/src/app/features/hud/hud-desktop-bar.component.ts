@@ -37,6 +37,10 @@ import { InputDeviceBadgeComponent } from '../../shared/components/input-device-
         <kbd class="legend-key font-mono-tactical">H</kbd>
         <span class="legend-label">Cinema</span>
       </div>
+      <div class="legend-item">
+        <kbd class="legend-key font-mono-tactical">L</kbd>
+        <span class="legend-label">Camadas</span>
+      </div>
     </div>
   `,
   styles: [

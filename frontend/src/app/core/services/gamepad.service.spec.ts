@@ -13,7 +13,9 @@ describe('GamepadService', () => {
           provide: MapService,
           useValue: {
             panBy: jest.fn(),
+            orbitCameraBy: jest.fn(),
             zoomBy: jest.fn(),
+            zoomImmediateBy: jest.fn(),
             toggle3D: jest.fn(),
           },
         },
@@ -119,5 +121,92 @@ describe('GamepadService', () => {
     expect(onStepFocus).toHaveBeenCalledTimes(4);
 
     nowSpy.mockRestore();
+  });
+
+  it('should zoom immediately via L2/R2 on map and block zoom/pan when a modal is open', () => {
+    const mapMock = TestBed.inject(MapService) as unknown as {
+      zoomImmediateBy: jest.Mock;
+      panBy: jest.Mock;
+    };
+    let modalOpen = false;
+    service.init({ isModalOpen: () => modalOpen });
+
+    const buttons = Array.from({ length: 16 }, () => ({ pressed: false, value: 0 }));
+    buttons[6] = { pressed: true, value: 1 }; // L2 (- zoom)
+    const pad = { axes: [0, 0, 0, 0], buttons } as unknown as Gamepad;
+
+    const updateZoom = (service as unknown as { updateMapZoom: (p: Gamepad) => void }).updateMapZoom.bind(
+      service,
+    );
+    updateZoom(pad);
+    expect(mapMock.zoomImmediateBy).toHaveBeenCalledWith(-0.045);
+
+    mapMock.zoomImmediateBy.mockClear();
+    modalOpen = true;
+    updateZoom(pad);
+    expect(mapMock.zoomImmediateBy).not.toHaveBeenCalled();
+  });
+
+  it('throttles document.elementFromPoint hit-testing during virtual cursor movement', () => {
+    service.init();
+    service.setCursorPosition(300, 300, false);
+
+    const elementFromPointMock = jest.fn().mockReturnValue(null);
+    const originalDescriptor = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: elementFromPointMock,
+    });
+
+    const nowSpy = jest.spyOn(performance, 'now');
+    const fakePad = {
+      axes: [0.5, 0.5, 0, 0],
+      buttons: Array.from({ length: 16 }, () => ({ pressed: false, value: 0 })),
+    } as unknown as Gamepad;
+    const updateCursor = (service as unknown as { updateVirtualCursor: (p: Gamepad) => void })
+      .updateVirtualCursor.bind(service);
+
+    try {
+      nowSpy.mockReturnValue(100);
+      updateCursor(fakePad);
+      nowSpy.mockReturnValue(116);
+      updateCursor(fakePad);
+      nowSpy.mockReturnValue(140);
+      updateCursor(fakePad);
+      expect(elementFromPointMock).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(200);
+      updateCursor(fakePad);
+      expect(elementFromPointMock).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+      if (originalDescriptor) {
+        Object.defineProperty(document, 'elementFromPoint', originalDescriptor);
+      } else {
+        delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint;
+      }
+    }
+  });
+
+  it('orbits camera bearing and 3D pitch via right analog stick and blocks when modal is open', () => {
+    const mapMock = TestBed.inject(MapService) as unknown as { orbitCameraBy: jest.Mock };
+    let modalOpen = false;
+    service.init({ isModalOpen: () => modalOpen });
+
+    const pad = {
+      axes: [0, 0, 0.5, -0.8],
+      buttons: Array.from({ length: 16 }, () => ({ pressed: false, value: 0 })),
+    } as unknown as Gamepad;
+
+    const updateOrbit = (service as unknown as { updateMapOrbit: (p: Gamepad) => void }).updateMapOrbit.bind(
+      service,
+    );
+    updateOrbit(pad);
+    expect(mapMock.orbitCameraBy).toHaveBeenCalledWith(0.5 * 2.2, 0.8 * 1.4);
+
+    mapMock.orbitCameraBy.mockClear();
+    modalOpen = true;
+    updateOrbit(pad);
+    expect(mapMock.orbitCameraBy).not.toHaveBeenCalled();
   });
 });

@@ -66,7 +66,7 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
   test('creates a custom pin on map and removes all via submenu', async ({ page }) => {
     await page.keyboard.press('m');
     const wheel = page.locator('.weapon-wheel');
-    await wheel.getByRole('menuitem', { name: /Mapa/i }).click();
+    await wheel.getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
     await wheel.getByRole('menuitem', { name: /Marcador/i }).click();
 
     // Activate pin mode
@@ -173,6 +173,7 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
   test('renders map without hiding overlapping POI icons and includes leader-line layers', async ({ page }) => {
     await page.locator('canvas.maplibregl-canvas').waitFor({ state: 'visible' });
     await expect(page.locator('.hud-shell')).toBeVisible();
+    await expect(page.locator('.leonida-poi-overlay')).toBeAttached();
     await page.keyboard.press('/');
     const searchBar = page.locator('.quick-search-bar');
     await expect(searchBar.locator('.qs-footer-total')).toContainText('locais');
@@ -245,5 +246,471 @@ test.describe('Gta6Map (Leonida) — E2E HUD & Map Flows', () => {
     await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
     await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
     await expect(page.locator('.hud-sidebar .filters-count')).toContainText('1/');
+  });
+
+  test('centralizes map via button/shortcut and focuses last item when collapsing search category', async ({ page }) => {
+    // Center map button works without errors
+    await page.locator('button[aria-label="Centralizar mapa"]').click();
+    await expect(page.locator('canvas.maplibregl-canvas')).toBeVisible();
+
+    // Expand and collapse category in Quick Search -> focus returns to last visible item
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    const firstGroup = searchBar.locator('.qs-group').first();
+    await firstGroup.getByRole('button', { name: /Ver todos/i }).click();
+    await expect(firstGroup.getByRole('button', { name: /Recolher/i })).toBeVisible();
+    await firstGroup.getByRole('button', { name: /Recolher/i }).click();
+    await expect(firstGroup.locator('.qs-item').last()).toBeFocused();
+  });
+
+  test('unifies mouse and gamepad into a single cursor when controller is connected', async ({ page }) => {
+    const desktopCursor = await page.locator('.hud-shell').evaluate((el) => getComputedStyle(el).cursor);
+    const canvasDesktopCursor = await page
+      .locator('canvas.maplibregl-canvas')
+      .evaluate((el) => getComputedStyle(el).cursor);
+    expect(desktopCursor).toContain('%23F44E8F');
+    expect(canvasDesktopCursor).toContain('%23F44E8F');
+
+    await page.evaluate(() => {
+      const fakePad = {
+        id: 'DualSense Wireless Controller (054c)',
+        index: 0,
+        connected: true,
+        axes: [0, 0, 0, 0],
+        buttons: Array.from({ length: 16 }, () => ({ pressed: false, touched: false, value: 0 })),
+        mapping: 'standard',
+        timestamp: performance.now(),
+      };
+      Object.defineProperty(navigator, 'getGamepads', {
+        configurable: true,
+        value: () => [fakePad],
+      });
+      const evt = new Event('gamepadconnected') as GamepadEvent;
+      Object.defineProperty(evt, 'gamepad', { value: fakePad });
+      window.dispatchEvent(evt);
+    });
+
+    await page.mouse.move(420, 260);
+    const cursor = page.locator('.gamepad-cursor');
+    const cursorSvgHtml = await cursor.locator('svg').innerHTML();
+    expect(cursorSvgHtml).toContain('#F44E8F');
+    expect(cursorSvgHtml).toContain('#FFB458');
+    await expect(async () => {
+      const box = await cursor.boundingBox();
+      expect(box).not.toBeNull();
+      expect(Math.round(box!.x + box!.width / 2)).toBe(420);
+      expect(Math.round(box!.y + box!.height / 2)).toBe(260);
+    }).toPass({ timeout: 2000 });
+    await expect(page.locator('.hud-shell.console-safe-area')).toHaveCSS('cursor', 'none');
+    await expect(page.locator('canvas.maplibregl-canvas')).toHaveCSS('cursor', 'none');
+  });
+
+  test('map pan/zoom and 2D/3D toggle run without WebGL abort errors or heavy HUD backdrop-filter', async ({ page }) => {
+    const pageErrors: string[] = [];
+    const mapWarnings: string[] = [];
+    page.on('pageerror', (err) => pageErrors.push(err.message));
+    page.on('console', (msg) => {
+      if (msg.type() === 'warning' && /clusterMaxZoom|hillshade|3D terrain/i.test(msg.text())) {
+        mapWarnings.push(msg.text());
+      }
+    });
+
+    const canvas = page.locator('canvas.maplibregl-canvas');
+    await canvas.waitFor({ state: 'visible' });
+
+    const backdropFilter = await page
+      .locator('.map-controls .hud-panel')
+      .first()
+      .evaluate((el) => getComputedStyle(el).backdropFilter);
+    expect(backdropFilter).toBe('none');
+
+    // Pan and zoom interactions
+    await page.mouse.move(520, 340);
+    await page.mouse.down();
+    await page.mouse.move(660, 420, { steps: 6 });
+    await page.mouse.up();
+    await page.keyboard.press('=');
+    await page.keyboard.press('-');
+
+    // Toggle 3D on and off
+    await page.keyboard.press('3');
+    await page.waitForTimeout(500);
+    await page.keyboard.press('3');
+    await page.waitForTimeout(450);
+
+    expect(pageErrors).toHaveLength(0);
+    expect(mapWarnings).toHaveLength(0);
+
+    const webglErrors = await page.evaluate(() => {
+      const api = (
+        window as unknown as {
+          __leonidaPerf?: { getMetrics: () => Array<{ level: string; source: string; message: string }> };
+        }
+      ).__leonidaPerf;
+      return (api?.getMetrics() ?? []).filter((m) => m.level === 'error' && m.source === 'webgl');
+    });
+    expect(webglErrors).toHaveLength(0);
+  });
+
+  test('all opened modals play panel entrance animation', async ({ page }) => {
+    // 1. Quick Search modal (3D stage + open/close panel animation)
+    await page.keyboard.press('/');
+    const searchStage = page.locator('.quick-search-stage');
+    const searchBar = page.locator('.quick-search-bar');
+    await expect(searchBar).toBeVisible();
+    const qsStagePerspective = await searchStage.evaluate((el) => getComputedStyle(el).perspective);
+    expect(qsStagePerspective).toBe('1150px');
+    const qsAnim = await searchBar.evaluate((el) => getComputedStyle(el).animationName);
+    expect(qsAnim).toContain('quickSearchDrop');
+    await expect(async () => {
+      const state = await searchBar.evaluate((el) => {
+        const barRect = el.getBoundingClientRect();
+        const folds = Array.from(el.querySelectorAll('.qs-fold'));
+        const allInside = folds.every((f) => {
+          const r = f.getBoundingClientRect();
+          return (
+            r.left >= barRect.left - 0.5 &&
+            r.right <= barRect.right + 0.5 &&
+            r.top >= barRect.top - 0.5 &&
+            r.bottom <= barRect.bottom + 0.5
+          );
+        });
+        return {
+          transform: getComputedStyle(el).transform,
+          folds: folds.map((f) => getComputedStyle(f).transform),
+          allInside,
+        };
+      });
+      expect(['none', 'matrix(1, 0, 0, 1, 0, 0)']).toContain(state.transform);
+      expect(state.folds).toEqual(['none', 'none', 'none']);
+      expect(state.allInside).toBe(true);
+    }).toPass({ timeout: 2000 });
+
+    // 2. POI detail card modal
+    await searchBar.locator('.qs-item').first().click();
+    await expect(searchBar).toHaveClass(/is-collapsed/);
+    await expect(searchBar).toBeHidden();
+    const poiCard = page.locator('.poi-card');
+    await expect(poiCard).toBeVisible();
+    const poiStyles = await poiCard.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { animationName: s.animationName, transformOrigin: s.transformOrigin };
+    });
+    expect(poiStyles.animationName).toContain('modalPanelIn');
+    expect(poiStyles.transformOrigin).toContain('0px');
+
+    // 3. Weapon Wheel & Pin Submenu modals
+    await page.keyboard.press('m');
+    const wheel = page.locator('.weapon-wheel');
+    await expect(wheel).toBeVisible();
+    const wheelAnim = await wheel.evaluate((el) => getComputedStyle(el).animationName);
+    expect(wheelAnim).toContain('wheelPop');
+
+    await wheel.getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await wheel.getByRole('menuitem', { name: /Marcador/i }).click();
+    const submenu = wheel.locator('.pin-submenu');
+    await expect(submenu).toBeVisible();
+    const submenuAnim = await submenu.evaluate((el) => getComputedStyle(el).animationName);
+    expect(submenuAnim).toContain('pinSubmenuIn');
+
+    // 4. Custom Pin Popup modal (transparent MapLibre wrapper + copy coordinates button/shortcut)
+    await submenu.getByRole('button', { name: /Marcar/i }).click();
+    await page.locator('canvas.maplibregl-canvas').click({ position: { x: 420, y: 310 } });
+    await page.locator('.maplibregl-marker').first().click();
+    const pinPopup = page.locator('.leonida-pin-popup');
+    await expect(pinPopup).toBeVisible();
+    const popupAnim = await pinPopup.evaluate((el) => getComputedStyle(el).animationName);
+    expect(popupAnim).toContain('modalPanelIn');
+    const wrapperBg = await page
+      .locator('.maplibregl-popup:has(.leonida-pin-popup) .maplibregl-popup-content')
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(wrapperBg).toBe('rgba(0, 0, 0, 0)');
+    const layerOrder = await page.evaluate(() => {
+      const overlay = document.querySelector('.leonida-poi-overlay') as HTMLElement;
+      const popup = document.querySelector('.maplibregl-popup') as HTMLElement;
+      return {
+        overlayZ: Number(getComputedStyle(overlay).zIndex) || 0,
+        popupZ: Number(getComputedStyle(popup).zIndex) || 0,
+      };
+    });
+    expect(layerOrder.popupZ).toBeGreaterThan(layerOrder.overlayZ);
+    await page.keyboard.press('k');
+    await expect(pinPopup.locator('.leonida-pin-copy-btn')).toHaveClass(/is-copied/);
+  });
+
+  test('open sidebar flattens 3D fold transforms at rest to prevent subpixel seam lines', async ({ page }) => {
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+
+    const sidebar = page.locator('.hud-sidebar');
+    await expect(sidebar).toBeVisible();
+
+    await expect(async () => {
+      const transforms = await sidebar.evaluate((el) => {
+        const folds = Array.from(el.querySelectorAll('.map-fold')).map((f) => getComputedStyle(f).transform);
+        return { sidebar: getComputedStyle(el).transform, folds };
+      });
+      expect(transforms.sidebar).toBe('none');
+      expect(transforms.folds).toEqual(['none', 'none', 'none']);
+    }).toPass({ timeout: 2000 });
+  });
+
+  test('right analog stick adjusts 3D depth (pitch) and camera rotation (bearing)', async ({ page }) => {
+    await page.locator('canvas.maplibregl-canvas').waitFor({ state: 'visible' });
+
+    await page.evaluate(() => {
+      const fakePad = {
+        id: 'DualSense Wireless Controller (054c)',
+        index: 0,
+        connected: true,
+        axes: [0, 0, 0.7, -0.8],
+        buttons: Array.from({ length: 16 }, () => ({ pressed: false, touched: false, value: 0 })),
+        mapping: 'standard',
+        timestamp: performance.now(),
+      };
+      Object.defineProperty(navigator, 'getGamepads', {
+        configurable: true,
+        value: () => [fakePad],
+      });
+      const evt = new Event('gamepadconnected') as GamepadEvent;
+      Object.defineProperty(evt, 'gamepad', { value: fakePad });
+      window.dispatchEvent(evt);
+    });
+
+    await expect(page.locator('button[aria-label="Alternar visão 2D e 3D"]')).toHaveClass(/is-active/, {
+      timeout: 3000,
+    });
+    await expect(page.locator('.hud-shell')).toHaveCSS('background-color', 'rgb(47, 144, 176)');
+  });
+
+  test('deleting a focused route item from the panel stops its blink state', async ({ page }) => {
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    await searchBar.locator('.qs-item').first().click();
+
+    const poiCard = page.locator('.poi-card');
+    await expect(poiCard).toBeVisible();
+    await poiCard.getByRole('button', { name: /Adicionar à rota/i }).click();
+    await expect(poiCard.getByRole('button', { name: /Remover da rota/i })).toBeVisible();
+
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+
+    const removeStopBtn = page.locator('.hud-sidebar').getByRole('button', { name: 'Remover parada da rota' }).first();
+    await expect(removeStopBtn).toBeVisible();
+    await removeStopBtn.click();
+
+    await expect(page.locator('.hud-sidebar').getByText(/MINHA ROTA/i)).toHaveCount(0);
+    await expect(poiCard.getByRole('button', { name: /Adicionar à rota/i })).toBeVisible();
+  });
+
+  test('pins tactical panel with shortcut/button and opens backpack while panel or quick search is open', async ({ page }) => {
+    // Open panel via weapon wheel
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+    const sidebar = page.locator('.hud-sidebar');
+    await expect(sidebar).toBeVisible();
+
+    // Pin panel via .sidebar-pin-btn (shows T shortcut badge)
+    const pinBtn = sidebar.locator('.sidebar-pin-btn');
+    await expect(pinBtn).toContainText('T');
+    await pinBtn.click();
+    await expect(pinBtn).toHaveClass(/is-pinned/);
+
+    // Clicking on map or pressing Escape keeps pinned panel open
+    await page.locator('canvas.maplibregl-canvas').click({ position: { x: 520, y: 320 } });
+    await page.keyboard.press('Escape');
+    await expect(sidebar).not.toHaveClass(/is-collapsed/);
+
+    // Backpack button opens weapon wheel while panel is open/pinned
+    await page.locator('.backpack-trigger').click();
+    await expect(page.locator('.weapon-wheel')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.weapon-wheel')).toBeHidden();
+    await expect(sidebar).not.toHaveClass(/is-collapsed/);
+
+    // Unpin with T shortcut and close with Escape
+    await page.keyboard.press('t');
+    await expect(pinBtn).not.toHaveClass(/is-pinned/);
+    await page.keyboard.press('Escape');
+    await expect(sidebar).toHaveClass(/is-collapsed/);
+
+    // Backpack can also be opened while quick search modal is open
+    await page.keyboard.press('/');
+    await expect(page.locator('.quick-search-bar')).toBeVisible();
+    await page.locator('.backpack-trigger').click();
+    await expect(page.locator('.weapon-wheel')).toBeVisible();
+  });
+
+  test('tactical panel search lists matching POIs, navigates to selected POI, and clears query', async ({ page }) => {
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+
+    const sidebar = page.locator('.hud-sidebar');
+    const panelInput = sidebar.locator('input.search-input');
+    await expect(panelInput).toBeVisible();
+    await panelInput.fill('Vice');
+
+    const resultsBox = sidebar.locator('.sidebar-search-results');
+    await expect(resultsBox).toBeVisible();
+    const firstItem = resultsBox.locator('.sidebar-search-item').first();
+    await expect(firstItem).toContainText(/Vice/i);
+
+    await firstItem.click();
+    await expect(page.locator('.poi-card')).toBeVisible();
+    await expect(sidebar).toHaveClass(/is-collapsed/);
+
+    // Re-open panel and clear query via clear button
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+    await sidebar.locator('.search-clear-btn').click();
+    await expect(panelInput).toHaveValue('');
+    await expect(resultsBox).toBeHidden();
+  });
+
+  test('switching co-located POIs in bottom-right detail card updates the selected POI and stack counter', async ({ page }) => {
+    await page.route('**/api/pois', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'STACK_A',
+            name: 'Vice Alpha Tower',
+            category: 'Pontos-Chave',
+            region: 'Vice Beach',
+            description: 'Ponto A sobreposto.',
+            lng: 21.515,
+            lat: 17.246,
+          },
+          {
+            id: 'STACK_B',
+            name: 'Vice Beta Hotel',
+            category: 'Hotéis',
+            region: 'Vice Beach',
+            description: 'Ponto B sobreposto.',
+            lng: 21.515,
+            lat: 17.246,
+          },
+        ]),
+      });
+    });
+
+    await page.goto('/');
+    await page.locator('.backpack-trigger').waitFor({ state: 'visible' });
+
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    await searchBar.locator('input.qs-input').fill('Vice Alpha');
+    await searchBar.locator('.qs-item').first().click();
+
+    const poiCard = page.locator('.poi-card');
+    await expect(poiCard).toBeVisible();
+    await expect(poiCard.locator('.poi-stack-label')).toHaveText('1 / 2 neste local');
+    await expect(poiCard.locator('.poi-title')).toHaveText('Vice Alpha Tower');
+
+    await poiCard.getByRole('button', { name: 'Próximo ponto neste local' }).click();
+    await expect(poiCard.locator('.poi-stack-label')).toHaveText('2 / 2 neste local');
+    await expect(poiCard.locator('.poi-title')).toHaveText('Vice Beta Hotel');
+  });
+
+  test('arrow keys navigate quick search results and confirm selection with Enter', async ({ page }) => {
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    await expect(searchBar).toBeVisible();
+
+    const input = searchBar.locator('input.qs-input');
+    await input.fill('Vice');
+    const items = searchBar.locator('.qs-item');
+    await expect(items.first()).toBeVisible();
+
+    // Blur input (simulate focus outside input) and press ArrowDown/ArrowUp/Enter
+    await searchBar.getByRole('button', { name: 'Só ir ao local' }).focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(items.nth(0)).toHaveClass(/is-highlighted/);
+    await page.keyboard.press('ArrowDown');
+    await expect(items.nth(1)).toHaveClass(/is-highlighted/);
+    await page.keyboard.press('ArrowUp');
+    await expect(items.nth(0)).toHaveClass(/is-highlighted/);
+
+    const chosenName = await items.nth(0).locator('.qs-item-name').innerText();
+    await page.keyboard.press('Enter');
+    await expect(searchBar).toBeHidden();
+    await expect(page.locator('.poi-card .poi-title')).toHaveText(chosenName);
+  });
+
+  test('places map controls beside backpack on top-left and legend with visibility shortcut on top-right', async ({ page }) => {
+    const backpackBox = await page.locator('.backpack-trigger').boundingBox();
+    const controlsBox = await page.locator('.map-controls').boundingBox();
+    const legend = page.locator('.map-legend-panel');
+    const legendBox = await legend.boundingBox();
+
+    expect(backpackBox).not.toBeNull();
+    expect(controlsBox).not.toBeNull();
+    expect(legendBox).not.toBeNull();
+
+    // Map controls sit to the right of backpack on the top-left with spacing and match backpack button size
+    expect(controlsBox!.x).toBeGreaterThan(backpackBox!.x + backpackBox!.width);
+    expect(controlsBox!.x).toBeLessThan(legendBox!.x);
+    const firstControlBtnBox = await page.locator('.map-controls .icon-btn').first().boundingBox();
+    expect(firstControlBtnBox?.width).toBe(backpackBox?.width);
+    expect(firstControlBtnBox?.height).toBe(backpackBox?.height);
+
+    // Top-right semi-transparent stepper cycles categories via arrows and L shortcut
+    await expect(legend.locator('.map-legend-title')).toContainText('Todas');
+    await expect(legend.locator('.map-legend-meaning')).toContainText(/Exibir todos/i);
+
+    await page.keyboard.press('l');
+    await expect(legend.locator('.map-legend-title')).not.toContainText('Todas');
+    await expect(legend.locator('app-poi-blip-icon .blip-badge')).toHaveCSS('width', '20px');
+    await expect(legend.locator('app-poi-blip-icon lucide-icon svg')).toBeVisible();
+
+    await legend.getByRole('button', { name: 'Categoria anterior' }).click();
+    await expect(legend.locator('.map-legend-title')).toContainText('Todas');
+
+    await legend.getByRole('button', { name: 'Próxima categoria' }).click();
+    await expect(legend.locator('.map-legend-title')).not.toContainText('Todas');
+
+    // Holding L shows the charging badge and resets filter back to Todas
+    await page.keyboard.down('l');
+    await expect(legend.locator('.map-legend-hold-badge')).toHaveClass(/is-holding/);
+    await expect(legend.locator('.map-legend-title')).toContainText('Todas', { timeout: 2000 });
+    await page.keyboard.up('l');
+  });
+
+  test('hides COORD. readout in tactical panel and supports coordinate search in search modals', async ({ page }) => {
+    // Open panel -> no COORD. row
+    await page.keyboard.press('m');
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Mapa/i }).click({ force: true });
+    await page.locator('.weapon-wheel').getByRole('menuitem', { name: /Filtros/i }).click();
+
+    const sidebar = page.locator('.hud-sidebar');
+    await expect(sidebar).toBeVisible();
+    await expect(sidebar.locator('.telemetry-readout')).not.toContainText('COORD.');
+    await expect(sidebar.locator('.telemetry-readout')).toContainText('ZOOM');
+
+    // Search coordinates in panel search
+    await sidebar.locator('input.search-input').fill('-31.819, 18.759');
+    await expect(sidebar.locator('.sidebar-search-item').first()).toContainText(
+      'Ir para -31.819, 18.759',
+    );
+    await sidebar.locator('.search-clear-btn').click();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(sidebar).toHaveClass(/is-collapsed/);
+
+    // Search coordinates in quick search
+    await page.keyboard.press('/');
+    const searchBar = page.locator('.quick-search-bar');
+    await searchBar.locator('input.qs-input').fill('-31.819, 18.759');
+    const firstResult = searchBar.locator('.qs-item').first();
+    await expect(firstResult).toContainText('Ir para -31.819, 18.759');
+    await firstResult.click();
+    await expect(page.locator('.poi-card .poi-title')).toHaveText('Ir para -31.819, 18.759');
   });
 });

@@ -54,7 +54,29 @@ describe('TelemetryService', () => {
     expect(summary.minFps).toBe(50);
     expect(summary.lastMapLoadMs).toBe(240);
 
+    const exported = JSON.parse(service.exportDevMetricsJson());
+    expect(exported.summary.count).toBe(3);
+    expect(exported.events).toHaveLength(3);
+
     service.clearDevMetrics();
     expect(service.getDevMetrics()).toHaveLength(0);
+  });
+
+  it('coalesces localStorage writes during bursts while keeping in-memory metrics current', () => {
+    const setItemSpy = jest.spyOn(Storage.prototype, 'setItem');
+
+    service.capture({ level: 'perf', source: 'rum', message: 'fps_sample:99' });
+    service.capture({ level: 'perf', source: 'rum', message: 'fps_sample:98' });
+    service.capture({ level: 'perf', source: 'rum', message: 'fps_sample:100' });
+
+    expect(service.getDevMetrics()).toHaveLength(3);
+    expect(setItemSpy).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(400);
+    expect(setItemSpy).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(1100);
+    httpMock.expectOne('/api/telemetry/client-error').flush({ ok: true });
+    setItemSpy.mockRestore();
   });
 });

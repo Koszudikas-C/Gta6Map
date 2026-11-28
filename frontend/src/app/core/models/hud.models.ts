@@ -19,6 +19,7 @@ export interface ClientTelemetryEvent {
   level: 'error' | 'warn' | 'perf';
   source: 'js' | 'webgl' | 'http' | 'rum';
   message: string;
+  meta?: Record<string, unknown>;
   stack?: string;
   route: string;
   deviceType: DeviceMode;

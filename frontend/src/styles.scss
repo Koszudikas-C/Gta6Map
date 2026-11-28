@@ -11,7 +11,7 @@
 :root {
   --bg-midnight: #120B1E;
   --bg-panel: #1C1230;
-  --bg-panel-elevated: rgba(28, 18, 48, 0.88);
+  --bg-panel-elevated: rgba(24, 15, 42, 0.94);
   --vice-magenta: #F44E8F;
   --sunset-peach: #FFA66B;
   --twilight-purple: #6E3CBC;
@@ -48,7 +48,7 @@ body {
   width: 100dvw;
   height: 100dvh;
   overflow: hidden;
-  background-color: var(--bg-midnight);
+  background-color: #2F90B0;
   color: var(--text-cream);
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
@@ -82,6 +82,17 @@ body {
   animation: gamepadFocusPulse 1.35s ease-in-out infinite;
 }
 
+.hud-shell.console-safe-area,
+.hud-shell.console-safe-area *,
+.hud-shell.console-safe-area .maplibregl-canvas-container,
+.hud-shell.console-safe-area .maplibregl-canvas {
+  cursor: none !important;
+}
+
+.hud-shell:not(.console-safe-area) .maplibregl-canvas-container.maplibregl-interactive {
+  cursor: inherit;
+}
+
 .font-display {
   font-family: var(--font-display);
   font-weight: 800;
@@ -99,25 +110,57 @@ body {
   background-color: var(--bg-panel-elevated);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-sm);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42);
 }
 
-.hud-panel::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.02;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-  border-radius: inherit;
+@keyframes modalPanelIn {
+  from {
+    opacity: 0;
+    transform: perspective(1150px) rotateX(-68deg) translateY(-8px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .hud-panel {
-    background-color: var(--bg-panel);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+@keyframes gtaPanelGlow {
+  0%,
+  100% {
+    border-color: rgba(123, 32, 143, 0.85);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 20px rgba(123, 32, 143, 0.32);
+  }
+  50% {
+    border-color: rgba(243, 106, 120, 0.85);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 24px rgba(243, 106, 120, 0.34);
+  }
+}
+
+.maplibregl-popup:has(.leonida-pin-popup) .maplibregl-popup-content {
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.maplibregl-popup:has(.leonida-pin-popup) .maplibregl-popup-tip {
+  display: none;
+}
+
+.leonida-pin-popup {
+  transform-origin: top center;
+  animation:
+    modalPanelIn 280ms cubic-bezier(0.22, 1.12, 0.36, 1) forwards,
+    gtaPanelGlow 8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poi-card,
+  .pin-submenu,
+  .leonida-pin-popup,
+  .quick-search-bar,
+  .weapon-wheel {
+    animation: none !important;
   }
 }
 
@@ -129,11 +172,9 @@ body {
 
 html,
 body,
-button,
-a,
-[role='button'],
-.hud-shell * {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23F44E8F' stroke-width='1.75' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 2v4M12 18v4M2 12h4M18 12h4'/%3E%3Ccircle cx='12' cy='12' r='1.5' fill='%23FFA66B' stroke='none'/%3E%3C/svg%3E") 12 12, crosshair !important;
+.hud-shell:not(.console-safe-area),
+.hud-shell:not(.console-safe-area) * {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32' fill='none'%3E%3Ccircle cx='16' cy='16' r='10' stroke='%2309050F' stroke-width='4'/%3E%3Cpath d='M16 2v5M16 25v5M2 16h5M25 16h5' stroke='%2309050F' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='10' stroke='%23F44E8F' stroke-width='2'/%3E%3Cpath d='M16 2v5M16 25v5M2 16h5M25 16h5' stroke='%23F44E8F' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='16' r='2.4' fill='%23FFB458' stroke='%2309050F' stroke-width='1.4'/%3E%3C/svg%3E") 16 16, crosshair !important;
 }
 
 .poi-focus-beacon {
@@ -180,4 +221,74 @@ a,
   100% {
     opacity: 1;
   }
+}
+
+.leonida-poi-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.maplibregl-marker {
+  z-index: 3;
+}
+
+.maplibregl-popup {
+  z-index: 10;
+}
+
+.leonida-poi-marker {
+  box-sizing: border-box;
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 0;
+  line-height: 0;
+  border-radius: 50%;
+  border: 2px solid #ffa66b;
+  background: radial-gradient(circle at 35% 28%, #2d1a4e 0%, #10081b 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 246, 248, 0.22),
+    0 3px 10px rgba(0, 0, 0, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform;
+  transition: filter 120ms ease;
+
+  &:hover {
+    filter: brightness(1.18);
+    z-index: 4;
+  }
+
+  svg {
+    width: 56%;
+    height: 56%;
+    display: block;
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+}
+
+.leonida-poi-stack-pill {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: #f44e8f;
+  border: 1.5px solid #120b1e;
+  color: #fff6f8;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 12px;
+  text-align: center;
+  pointer-events: none;
 }

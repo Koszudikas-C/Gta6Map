@@ -21,16 +21,15 @@
     <div
       class="gamepad-cursor"
       [class.is-hidden]="gamepadService.cursorHidden()"
-      [style.left.px]="gamepadService.cursorX()"
-      [style.top.px]="gamepadService.cursorY()"
+      [style.transform]="'translate3d(' + gamepadService.cursorX() + 'px, ' + gamepadService.cursorY() + 'px, 0)'"
       aria-hidden="true"
     >
-      <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-        <circle cx="16" cy="16" r="10" stroke="#120B1E" stroke-width="3.6" opacity="0.88" />
-        <path d="M16 2v6M16 24v6M2 16h6M24 16h6" stroke="#120B1E" stroke-width="3.6" stroke-linecap="round" opacity="0.88" />
-        <circle cx="16" cy="16" r="10" stroke="#F44E8F" stroke-width="1.9" />
-        <path d="M16 2v6M16 24v6M2 16h6M24 16h6" stroke="#FFA66B" stroke-width="1.9" stroke-linecap="round" />
-        <circle cx="16" cy="16" r="2.6" fill="#FFF6F8" stroke="#120B1E" stroke-width="1.2" />
+      <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+        <circle cx="22" cy="22" r="14" stroke="#09050F" stroke-width="5.5" />
+        <path d="M22 4v6M22 34v6M4 22h6M34 22h6" stroke="#09050F" stroke-width="5.5" stroke-linecap="round" />
+        <circle cx="22" cy="22" r="14" stroke="#F44E8F" stroke-width="2.6" />
+        <path d="M22 4v6M22 34v6M4 22h6M34 22h6" stroke="#F44E8F" stroke-width="2.6" stroke-linecap="round" />
+        <circle cx="22" cy="22" r="3.2" fill="#FFB458" stroke="#09050F" stroke-width="1.8" />
       </svg>
     </div>
   }
@@ -60,13 +59,13 @@
     <button
       type="button"
       class="hud-panel backpack-trigger"
-      [class.is-open]="sidebarOpen() || wheelOpen()"
+      [class.is-open]="wheelOpen()"
       (click)="toggleSidebar()"
-      [attr.data-tooltip]="platform.backpackTooltip(sidebarOpen() || wheelOpen())"
-      [attr.aria-expanded]="sidebarOpen() || wheelOpen()"
-      [attr.aria-label]="(sidebarOpen() || wheelOpen()) ? 'Fechar mochila' : 'Abrir mochila'"
+      [attr.data-tooltip]="platform.backpackTooltip(wheelOpen())"
+      [attr.aria-expanded]="wheelOpen()"
+      [attr.aria-label]="wheelOpen() ? 'Fechar mochila' : 'Abrir mochila'"
     >
-      @if (sidebarOpen() || wheelOpen()) {
+      @if (wheelOpen()) {
         <svg
           class="backpack-svg is-open"
           viewBox="0 0 24 24"
@@ -120,6 +119,20 @@
               <span class="brand-badge font-mono-tactical">LEONIDA // V0.1</span>
               <h1 class="brand-title font-display">MAPA TÁTICO</h1>
             </div>
+            <button
+              type="button"
+              class="sidebar-pin-btn"
+              [class.is-pinned]="sidebarPinned()"
+              (click)="toggleSidebarPin()"
+              [attr.aria-pressed]="sidebarPinned()"
+              [attr.aria-label]="sidebarPinned() ? 'Desafixar painel' : 'Fixar painel'"
+              [attr.title]="platform.formatWithShortcut(sidebarPinned() ? 'Desafixar painel' : 'Fixar painel', 'pinPanel')"
+            >
+              <lucide-icon [img]="sidebarPinned() ? icons.PinOff : icons.Pin" [size]="14" [strokeWidth]="2" />
+              @if (platform.shortcutKey('pinPanel'); as pinKey) {
+                <app-shortcut-key-badge [key]="pinKey" />
+              }
+            </button>
           </header>
 
           <div class="search-box">
@@ -128,22 +141,59 @@
               #searchInput
               type="search"
               class="search-input"
-              [placeholder]="gamepadService.connected() ? 'Buscar POI... (R1/RB)' : (isMobile() ? 'Buscar POI, bairro...' : 'Buscar POI, bairro... (Ctrl+K)')"
+              [placeholder]="platform.searchPlaceholder()"
               [value]="searchQuery()"
               (input)="onSearchInput($event)"
+              (keydown)="onSidebarSearchKeyDown($event)"
               aria-label="Buscar pontos de interesse"
             />
+            @if (searchQuery().length > 0) {
+              <button
+                type="button"
+                class="search-clear-btn"
+                (click)="clearSidebarSearch()"
+                aria-label="Limpar busca do painel"
+                title="Limpar"
+              >
+                <lucide-icon [img]="icons.X" [size]="13" [strokeWidth]="2" />
+              </button>
+            }
           </div>
+
+          @if (searchQuery().trim().length > 0) {
+            <div class="sidebar-search-results" role="listbox" aria-label="Resultados da busca no painel">
+              <div class="sidebar-search-meta">
+                <span>{{ sidebarSearchResults().length }} resultado(s)</span>
+                <button type="button" class="sidebar-search-clear-link" (click)="clearSidebarSearch()">Limpar</button>
+              </div>
+              @if (sidebarSearchResults().length > 0) {
+                <ul class="sidebar-search-list">
+                  @for (poi of sidebarSearchResults(); track poi.id; let idx = $index) {
+                    <li>
+                      <button
+                        type="button"
+                        class="sidebar-search-item"
+                        [class.is-highlighted]="sidebarSearchIndex() === idx"
+                        (click)="selectSidebarSearchResult(poi)"
+                      >
+                        <app-poi-blip-icon [category]="poi.category" [size]="16" variant="badge" />
+                        <span class="sidebar-search-item-text">
+                          <span class="sidebar-search-item-name">{{ poi.name }}</span>
+                          <span class="sidebar-search-item-sub">{{ poi.region }} · {{ poi.category }}</span>
+                        </span>
+                      </button>
+                    </li>
+                  }
+                </ul>
+              } @else {
+                <p class="sidebar-search-empty">Nenhum local encontrado.</p>
+              }
+            </div>
+          }
         </div>
 
         <div class="map-fold fold-2 hud-panel">
           <section class="telemetry-readout">
-            <div class="readout-row">
-              <span class="readout-label">COORD.</span>
-              <span class="readout-value font-mono-tactical">
-                {{ mapService.coordinates().lat }}, {{ mapService.coordinates().lng }}
-              </span>
-            </div>
             <div class="readout-row">
               <span class="readout-label">ZOOM / INCLINAÇÃO</span>
               <span class="readout-value font-mono-tactical">
@@ -170,7 +220,7 @@
                   (click)="selectCategory(category)"
                 >
                   @if (category !== 'Todas') {
-                    <app-poi-blip-icon [category]="category" [size]="12" variant="glyph" />
+                    <app-poi-blip-icon [category]="category" [size]="16" variant="badge" />
                   }
                   <span>{{ category }}</span>
                 </button>
@@ -244,56 +294,114 @@
       </aside>
     </div>
 
-    <!-- Top-Right Map Controls -->
-    <div class="map-controls hud-panel">
+    <!-- Top-Left Map Controls (beside backpack) -->
+    <div class="map-controls">
       <button
         type="button"
-        class="icon-btn"
+        class="hud-panel icon-btn"
         (click)="mapService.zoomBy(1)"
         [attr.data-tooltip]="platform.zoomInTooltip()"
         aria-label="Aumentar zoom"
       >
-        <lucide-icon [img]="icons.Plus" [size]="18" [strokeWidth]="1.75" />
+        <lucide-icon [img]="icons.Plus" [size]="20" [strokeWidth]="1.75" />
       </button>
       <button
         type="button"
-        class="icon-btn"
+        class="hud-panel icon-btn"
         (click)="mapService.zoomBy(-1)"
         [attr.data-tooltip]="platform.zoomOutTooltip()"
         aria-label="Diminuir zoom"
       >
-        <lucide-icon [img]="icons.Minus" [size]="18" [strokeWidth]="1.75" />
+        <lucide-icon [img]="icons.Minus" [size]="20" [strokeWidth]="1.75" />
       </button>
       <button
         type="button"
-        class="icon-btn"
+        class="hud-panel icon-btn"
         [class.is-active]="mapService.is3DMode()"
         (click)="mapService.toggle3D()"
         [attr.data-tooltip]="platform.toggle3DTooltip()"
         aria-label="Alternar visão 2D e 3D"
       >
-        <lucide-icon [img]="icons.Compass" [size]="18" [strokeWidth]="1.75" />
+        <lucide-icon [img]="icons.Compass" [size]="20" [strokeWidth]="1.75" />
       </button>
       <button
         type="button"
-        class="icon-btn"
+        class="hud-panel icon-btn"
         [class.is-active]="mapService.isPinMode()"
         (click)="mapService.togglePinMode()"
         [attr.data-tooltip]="platform.pinModeTooltip()"
         aria-label="Marcar ponto no mapa"
       >
-        <lucide-icon [img]="icons.MapPin" [size]="18" [strokeWidth]="1.75" />
+        <lucide-icon [img]="icons.MapPin" [size]="20" [strokeWidth]="1.75" />
       </button>
       <button
         type="button"
-        class="icon-btn"
+        class="hud-panel icon-btn"
         (click)="mapService.resetView()"
         [attr.data-tooltip]="platform.resetViewTooltip()"
         aria-label="Centralizar mapa"
       >
-        <lucide-icon [img]="icons.LocateFixed" [size]="18" [strokeWidth]="1.75" />
+        <lucide-icon [img]="icons.LocateFixed" [size]="20" [strokeWidth]="1.75" />
       </button>
     </div>
+
+    <!-- Top-Right Semi-Transparent Cyberpunk-Style Map Filter HUD -->
+    <section class="map-legend-panel" aria-label="Filtro de categorias do mapa">
+      @let activeLegend = activeLegendItem();
+      <div class="map-legend-stepper">
+        <button
+          type="button"
+          class="map-legend-arrow"
+          (click)="cyclePoiCategoryVisibility(-1)"
+          aria-label="Categoria anterior"
+        >
+          <lucide-icon [img]="icons.ChevronLeft" [size]="15" [strokeWidth]="2.2" />
+        </button>
+
+        <button
+          type="button"
+          class="map-legend-pill"
+          (click)="cyclePoiCategoryVisibility(1)"
+          [attr.aria-label]="'Alternar visibilidade dos pontos (' + activeLegend.category + ')'"
+          [attr.title]="platform.formatWithShortcut('Trocar categoria no mapa', 'cyclePoiVisibility')"
+        >
+          <span class="map-legend-icon">
+            @if (activeLegend.category === 'Todas') {
+              <lucide-icon [img]="icons.Layers" [size]="14" [strokeWidth]="2" />
+            } @else if (activeLegend.category === 'Ocultos') {
+              <lucide-icon [img]="icons.EyeOff" [size]="14" [strokeWidth]="2" />
+            } @else {
+              <app-poi-blip-icon [category]="activeLegend.category" [size]="20" variant="badge" />
+            }
+          </span>
+          <span class="map-legend-title font-display">
+            {{ activeLegend.category }}
+            <span class="map-legend-count font-mono-tactical">({{ activeLegend.count }})</span>
+          </span>
+          @if (platform.shortcutKey('cyclePoiVisibility'); as legendKey) {
+            <span
+              class="map-legend-hold-badge"
+              [class.is-holding]="legendHoldProgress() > 0"
+              [style.--hold-progress]="legendHoldProgress()"
+              title="Pressione L para avançar · Segure L para resetar para Todas"
+            >
+              <app-shortcut-key-badge [key]="legendKey" />
+            </span>
+          }
+        </button>
+
+        <button
+          type="button"
+          class="map-legend-arrow"
+          (click)="cyclePoiCategoryVisibility(1)"
+          aria-label="Próxima categoria"
+        >
+          <lucide-icon [img]="icons.ChevronRight" [size]="15" [strokeWidth]="2.2" />
+        </button>
+      </div>
+
+      <span class="map-legend-meaning">{{ activeLegend.meaning }}</span>
+    </section>
 
     <a
       class="gtadb-attribution font-mono-tactical"
@@ -338,7 +446,7 @@
           <button
             type="button"
             class="icon-btn"
-            (click)="mapService.selectedPoi.set(null)"
+            (click)="mapService.selectPoi(null)"
             aria-label="Fechar detalhes do POI"
           >
             <lucide-icon [img]="icons.Crosshair" [size]="16" [strokeWidth]="1.75" />

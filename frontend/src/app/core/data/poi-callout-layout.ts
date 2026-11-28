@@ -30,6 +30,7 @@ export function groupOverlappingPois(
   pois: LeonidaPoi[],
   zoom: number,
   thresholdPx = 22,
+  preferredPoiId?: string | null,
 ): StackedPoiGroupResult {
   const groupsByPoiId = new Map<string, LeonidaPoi[]>();
 
@@ -102,7 +103,10 @@ export function groupOverlappingPois(
     for (const member of group) {
       groupsByPoiId.set(member.id, group);
     }
-    return toStackedFeature(group[0], group.length);
+    const representative =
+      (preferredPoiId ? group.find((member) => member.id === preferredPoiId) : undefined) ??
+      group[0];
+    return toStackedFeature(representative, group.length);
   });
 
   return {
@@ -125,6 +129,7 @@ function toStackedFeature(poi: LeonidaPoi, stackCount: number) {
       iconKey: getPoiItemMeta(poi.category, poi.name).id,
       stackCount,
       stackLabel: stackCount > 1 ? String(stackCount) : '',
+      stackBadgeIcon: stackCount > 1 ? `stack-badge-${stackCount}` : '',
     },
     geometry: {
       type: 'Point' as const,

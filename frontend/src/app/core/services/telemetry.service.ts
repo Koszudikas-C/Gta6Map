@@ -21,6 +21,8 @@ export class TelemetryService {
   private readonly platformId = inject(PLATFORM_ID);
   private readonly queue: ClientTelemetryEvent[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private devMetricsCache: ClientTelemetryEvent[] | null = null;
   private readonly buildVersion = '0.1.0-alpha';
 
   constructor() {
@@ -55,14 +57,20 @@ export class TelemetryService {
     if (!isPlatformBrowser(this.platformId)) {
       return [];
     }
+    if (this.devMetricsCache !== null) {
+      return [...this.devMetricsCache];
+    }
     try {
       const raw = localStorage.getItem(DEV_PERF_STORAGE_KEY);
       if (!raw) {
+        this.devMetricsCache = [];
         return [];
       }
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? (parsed as ClientTelemetryEvent[]) : [];
+      this.devMetricsCache = Array.isArray(parsed) ? (parsed as ClientTelemetryEvent[]) : [];
+      return [...this.devMetricsCache];
     } catch {
+      this.devMetricsCache = [];
       return [];
     }
   }
@@ -71,6 +79,11 @@ export class TelemetryService {
     if (!isPlatformBrowser(this.platformId)) {
       return;
     }
+    if (this.persistTimer !== null) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.devMetricsCache = [];
     try {
       localStorage.removeItem(DEV_PERF_STORAGE_KEY);
     } catch {
@@ -113,18 +126,50 @@ export class TelemetryService {
     };
   }
 
+  exportDevMetricsJson(): string {
+    return JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        summary: this.getDevMetricsSummary(),
+        events: this.getDevMetrics(),
+      },
+      null,
+      2,
+    );
+  }
+
+  downloadDevMetricsJson(): void {
+    if (!isPlatformBrowser(this.platformId)) {
+      return;
+    }
+    const json = this.exportDevMetricsJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leonida-perf-metrics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   private isDevMetricsEnabled(): boolean {
     return isDevMode() && environment.enableTelemetry && isPlatformBrowser(this.platformId);
   }
 
   private persistDevMetric(event: ClientTelemetryEvent): void {
-    try {
-      const existing = this.getDevMetrics();
-      const next = [...existing, event].slice(-MAX_DEV_PERF_ENTRIES);
-      localStorage.setItem(DEV_PERF_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // Ignore storage quota errors
+    const existing = this.getDevMetrics();
+    this.devMetricsCache = [...existing, event].slice(-MAX_DEV_PERF_ENTRIES);
+    if (this.persistTimer !== null) {
+      return;
     }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      try {
+        localStorage.setItem(DEV_PERF_STORAGE_KEY, JSON.stringify(this.devMetricsCache ?? []));
+      } catch {
+        // Ignore storage quota errors
+      }
+    }, 400);
   }
 
   private recordStartupPerfMetrics(): void {
@@ -160,12 +205,14 @@ export class TelemetryService {
         getMetrics: () => ClientTelemetryEvent[];
         summary: () => DevPerfSummary;
         clear: () => void;
+        downloadJson: () => void;
       };
     };
     win.__leonidaPerf = {
       getMetrics: () => this.getDevMetrics(),
       summary: () => this.getDevMetricsSummary(),
       clear: () => this.clearDevMetrics(),
+      downloadJson: () => this.downloadDevMetricsJson(),
     };
   }
 

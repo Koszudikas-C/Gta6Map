@@ -8,7 +8,14 @@ import {
   MapQualityMode,
   poisToGeoJson,
 } from '../data/leonida-map.data';
-import { ALL_POI_BLIPS, buildMapBlipSvg, getPoiItemMeta } from '../data/poi-category-icons';
+import {
+  ALL_POI_BLIPS,
+  POI_BLIP_CATALOG,
+  PoiBlipId,
+  buildMapBlipSvg,
+  getPoiItemMeta,
+  renderLucideIconElements,
+} from '../data/poi-category-icons';
 import { groupOverlappingPois } from '../data/poi-callout-layout';
 import { MapCoordinates } from '../models/hud.models';
 import { environment } from '../../../environments/environment';
@@ -81,9 +88,17 @@ function resolveAssetUrls(): LeonidaAssetUrls {
 }
 
 function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
+  const oceanColor = LEONIDA_MAP_CONFIG.styles.satellite.oceanColor;
   return {
     version: 8,
     name: 'Leonida GTADB Map',
+    sky: {
+      'sky-color': oceanColor,
+      'horizon-color': oceanColor,
+      'fog-color': oceanColor,
+      'sky-horizon-blend': 0.5,
+      'fog-ground-blend': 0.5,
+    },
     sources: {
       'leonida-satellite': {
         type: 'raster',
@@ -94,6 +109,14 @@ function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
         scheme: 'xyz',
       },
       'leonida-dem': {
+        type: 'raster-dem',
+        tiles: [urls.demTilesUrl],
+        tileSize: LEONIDA_MAP_CONFIG.tileSize,
+        encoding: 'terrarium',
+        minzoom: 0,
+        maxzoom: 1,
+      },
+      'leonida-hillshade-dem': {
         type: 'raster-dem',
         tiles: [urls.demTilesUrl],
         tileSize: LEONIDA_MAP_CONFIG.tileSize,
@@ -115,12 +138,12 @@ function buildLeonidaStyle(urls: LeonidaAssetUrls): StyleSpecification {
         type: 'raster',
         source: 'leonida-satellite',
         layout: { visibility: 'visible' },
-        paint: { 'raster-fade-duration': 150 },
+        paint: { 'raster-fade-duration': 0 },
       },
       {
         id: 'leonida-hillshade',
         type: 'hillshade',
-        source: 'leonida-dem',
+        source: 'leonida-hillshade-dem',
         layout: { visibility: 'none' },
         paint: {
           'hillshade-exaggeration': 0.35,
@@ -145,6 +168,24 @@ function loadSavedCustomPins(): CustomMapPin[] {
   }
 }
 
+export function parseCoordinateQuery(raw: string): { lng: number; lat: number } | null {
+  const cleaned = raw.trim().replace(/[()°]/g, '');
+  const match = cleaned.match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) {
+    return null;
+  }
+  const lng = Number(match[1]);
+  const lat = Number(match[2]);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+    return null;
+  }
+  const [[minLng, minLat], [maxLng, maxLat]] = LEONIDA_MAP_CONFIG.maxBounds;
+  if (lng < minLng || lng > maxLng || lat < minLat || lat > maxLat) {
+    return null;
+  }
+  return { lng, lat };
+}
+
 @Injectable({ providedIn: 'root' })
 export class MapService {
   private readonly ngZone = inject(NgZone);
@@ -155,6 +196,12 @@ export class MapService {
   private focusPoi: LeonidaPoi | null = null;
   private routeBlinkTimer: ReturnType<typeof setInterval> | null = null;
   private customPinMarkers = new Map<string, Marker>();
+  private poiOverlayEl: HTMLElement | null = null;
+  private poiMarkerNodes = new Map<
+    string,
+    { el: HTMLButtonElement; iconKey: string; stackCount: number; lng: number; lat: number }
+  >();
+  private lastPoiOverlaySize = -1;
   private fpsRafId: number | null = null;
   private lowFpsStartTime: number | null = null;
   private lastLowFpsReportTime = 0;
@@ -164,6 +211,10 @@ export class MapService {
   private currentFilteredPois: LeonidaPoi[] = this.allPois;
   private poiGroupsById = new Map<string, LeonidaPoi[]>();
   private lastCalloutZoom = -1;
+  private lastCalloutSignature = '';
+  private lastPinSize = -1;
+  private trackLiveCoordinates = false;
+  private isMapMoving = false;
 
   readonly isLoaded = signal(false);
   readonly is3DMode = signal(false);
@@ -208,9 +259,13 @@ export class MapService {
           bearing: 0,
           maxPitch: 65,
           attributionControl: false,
+          fadeDuration: 0,
+          maxTileCacheSize: 256,
+          cancelPendingTileRequestsWhileZooming: true,
+          pixelRatio: typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 1.5) : 1,
         });
 
-        map.on('load', async () => {
+        map.on('load', () => {
           const loadDurationMs = Math.round(performance.now() - initStart);
           this.telemetry.capture({
             level: 'perf',
@@ -218,38 +273,46 @@ export class MapService {
             message: `map_load_ms:${loadDurationMs}`,
           });
           this.add3DBuildingsLayer(map);
-          await this.registerPoiBlipImages(map);
           this.addPoiLayers(map);
           this.bindPoiInteractions(map);
+          void this.registerPoiBlipImages(map);
           void this.loadLandmarks(urls.apiPoisUrl, urls.landmarksUrl);
           this.ngZone.run(() => this.isLoaded.set(true));
           this.startFpsMonitor();
         });
 
+        map.on('movestart', () => {
+          this.isMapMoving = true;
+        });
+
         let lastCoordUpdate = 0;
         map.on('move', () => {
+          if (!this.trackLiveCoordinates) {
+            return;
+          }
           const now = performance.now();
-          if (now - lastCoordUpdate < 100) {
+          if (now - lastCoordUpdate < 150) {
             return;
           }
           lastCoordUpdate = now;
-          const center = map.getCenter();
-          this.ngZone.run(() => {
-            this.coordinates.set({
-              lng: Number(center.lng.toFixed(4)),
-              lat: Number(center.lat.toFixed(4)),
-              zoom: Number(map.getZoom().toFixed(2)),
-              pitch: Number(map.getPitch().toFixed(1)),
-              bearing: Number(map.getBearing().toFixed(1)),
-            });
-          });
+          this.emitCoordinates(map);
         });
 
-        map.on('error', (e: { error?: { message?: string } }) => {
+        map.on('moveend', () => {
+          this.isMapMoving = false;
+          this.emitCoordinates(map);
+        });
+
+        map.on('error', (e: { error?: { name?: string; message?: string } }) => {
+          const err = e.error;
+          const msg = err?.message ?? '';
+          if (err?.name === 'AbortError' || /aborted/i.test(msg)) {
+            return;
+          }
           this.telemetry.capture({
             level: 'error',
             source: 'webgl',
-            message: e.error?.message ?? 'MapLibre rendering error',
+            message: msg || 'MapLibre rendering error',
           });
         });
 
@@ -261,6 +324,37 @@ export class MapService {
           message: err instanceof Error ? err.message : 'Failed to initialize MapLibre',
         });
       }
+    });
+  }
+
+  setLiveCoordinatesEnabled(enabled: boolean): void {
+    this.trackLiveCoordinates = enabled;
+    if (enabled && this.map) {
+      this.emitCoordinates(this.map);
+    }
+  }
+
+  private emitCoordinates(map: MapLibreMap): void {
+    const center = map.getCenter();
+    const next: MapCoordinates = {
+      lng: Number(center.lng.toFixed(4)),
+      lat: Number(center.lat.toFixed(4)),
+      zoom: Number(map.getZoom().toFixed(2)),
+      pitch: Number(map.getPitch().toFixed(1)),
+      bearing: Number(map.getBearing().toFixed(1)),
+    };
+    const current = this.coordinates();
+    if (
+      current.lng === next.lng &&
+      current.lat === next.lat &&
+      current.zoom === next.zoom &&
+      current.pitch === next.pitch &&
+      current.bearing === next.bearing
+    ) {
+      return;
+    }
+    this.ngZone.run(() => {
+      this.coordinates.set(next);
     });
   }
 
@@ -295,15 +389,20 @@ export class MapService {
 
     this.ngZone.runOutsideAngular(() => {
       if (next) {
-        this.map?.setTerrain({ source: 'leonida-dem', exaggeration: 4 });
-        this.map?.setLayoutProperty('leonida-hillshade', 'visibility', 'visible');
-        this.map?.setLayoutProperty('leonida-buildings-3d', 'visibility', 'visible');
-        this.map?.easeTo({ pitch: 60, bearing: -18, duration: 550 });
+        this.map?.easeTo({ pitch: 58, bearing: -18, duration: 420 });
+        this.map?.once('moveend', () => {
+          if (!this.is3DMode() || !this.map) {
+            return;
+          }
+          this.map.setTerrain({ source: 'leonida-dem', exaggeration: 4 });
+          this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'visible');
+          this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'visible');
+        });
       } else {
         this.map?.setTerrain(null);
         this.map?.setLayoutProperty('leonida-hillshade', 'visibility', 'none');
         this.map?.setLayoutProperty('leonida-buildings-3d', 'visibility', 'none');
-        this.map?.easeTo({ pitch: 0, bearing: 0, duration: 450 });
+        this.map?.easeTo({ pitch: 0, bearing: 0, duration: 380 });
       }
     });
   }
@@ -325,7 +424,9 @@ export class MapService {
     const normalized = normalizeSearchText(query.trim());
     const filtered =
       normalized.length > 0
-        ? this.searchPoisFast(normalized, category, Number.MAX_SAFE_INTEGER)
+        ? this.searchPoisFast(normalized, category, Number.MAX_SAFE_INTEGER).filter(
+            (poi) => !poi.id.startsWith('__coord__:'),
+          )
         : category === 'Todas'
           ? this.allPois
           : (this.categoryIndex.get(category) ?? []);
@@ -345,9 +446,17 @@ export class MapService {
     this.selectedPoi.set(poi);
     if (!poi) {
       this.coLocatedPois.set([]);
+      if (this.focusPoi !== null) {
+        this.focusPoi = null;
+        this.syncRouteVisuals();
+      }
       return;
     }
-    this.coLocatedPois.set(this.poiGroupsById.get(poi.id) ?? [poi]);
+    const group = this.poiGroupsById.get(poi.id) ?? [poi];
+    this.coLocatedPois.set(group);
+    if (group.length > 1) {
+      this.syncPoiCalloutData(true);
+    }
   }
 
   cycleCoLocatedPoi(delta: 1 | -1): void {
@@ -358,7 +467,13 @@ export class MapService {
     const current = this.selectedPoi();
     const idx = current ? group.findIndex((p) => p.id === current.id) : 0;
     const nextIdx = (idx + delta + group.length) % group.length;
-    this.selectedPoi.set(group[nextIdx]);
+    const nextPoi = group[nextIdx];
+    this.selectedPoi.set(nextPoi);
+    if (this.focusPoi) {
+      this.focusPoi = nextPoi;
+      this.syncRouteVisuals();
+    }
+    this.syncPoiCalloutData(true);
   }
 
   private syncPoiCalloutData(force = false): void {
@@ -367,17 +482,67 @@ export class MapService {
       return;
     }
     const zoom = this.map.getZoom();
-    if (!force && Math.abs(zoom - this.lastCalloutZoom) < 0.25) {
+    if (!force && zoom <= 4.2 && this.lastCalloutZoom <= 4.2 && this.lastCalloutZoom >= 0) {
+      return;
+    }
+    if (!force && Math.abs(zoom - this.lastCalloutZoom) < 0.5) {
       return;
     }
     this.lastCalloutZoom = zoom;
-    const { geoJson, groupsByPoiId } = groupOverlappingPois(this.currentFilteredPois, zoom, 22);
+    const { geoJson, groupsByPoiId } = groupOverlappingPois(
+      this.currentFilteredPois,
+      zoom,
+      22,
+      this.selectedPoi()?.id,
+    );
+    const signature = geoJson.features
+      .map((f) => `${f.properties?.['id'] ?? ''}:${f.properties?.['stackCount'] ?? 1}`)
+      .join('|');
     this.poiGroupsById = groupsByPoiId;
+    const activePoi = this.selectedPoi();
+    if (activePoi) {
+      this.coLocatedPois.set(groupsByPoiId.get(activePoi.id) ?? [activePoi]);
+    }
+    if (!force && signature === this.lastCalloutSignature) {
+      return;
+    }
+    this.lastCalloutSignature = signature;
+    for (const feature of geoJson.features) {
+      const count = feature.properties?.['stackCount'] as number | undefined;
+      const badgeIcon = feature.properties?.['stackBadgeIcon'] as string | undefined;
+      if (count && count > 1 && badgeIcon) {
+        this.ensureNumberBadgeImage(badgeIcon, String(count), '#F44E8F', '#FFF6F8', 8);
+      }
+    }
     source.setData(geoJson);
+    setTimeout(() => this.syncPoiOverlayMarkers(), 0);
   }
 
   searchPoisFast(query: string, category = 'Todas', limit = 24): LeonidaPoi[] {
     this.poisVersion();
+    const coord = parseCoordinateQuery(query);
+    if (coord && category !== 'Ocultos') {
+      const coordTarget: LeonidaPoi = {
+        id: `__coord__:${coord.lng.toFixed(4)},${coord.lat.toFixed(4)}`,
+        name: `Ir para ${coord.lng.toFixed(3)}, ${coord.lat.toFixed(3)}`,
+        category: 'Pontos-Chave',
+        region: 'Coordenadas exatas',
+        description: `Localização exata em ${coord.lng.toFixed(3)}, ${coord.lat.toFixed(3)}.`,
+        lng: coord.lng,
+        lat: coord.lat,
+      };
+      const pool = category === 'Todas' ? this.allPois : (this.categoryIndex.get(category) ?? []);
+      const nearest = [...pool]
+        .sort(
+          (a, b) =>
+            (a.lng - coord.lng) ** 2 +
+            (a.lat - coord.lat) ** 2 -
+            ((b.lng - coord.lng) ** 2 + (b.lat - coord.lat) ** 2),
+        )
+        .slice(0, Math.max(0, limit - 1));
+      return [coordTarget, ...nearest].slice(0, limit);
+    }
+
     const tokens = normalizeSearchText(query.trim())
       .split(/[\s,.\-_/]+/)
       .filter(Boolean);
@@ -433,12 +598,16 @@ export class MapService {
     const current = this.routePois();
     const exists = current.some((p) => p.id === poi.id);
     const next = exists ? current.filter((p) => p.id !== poi.id) : [...current, poi];
+    if (exists && this.focusPoi?.id === poi.id) {
+      this.focusPoi = null;
+    }
     this.routePois.set(next);
     this.saveRoute(next);
     this.syncRouteVisuals();
   }
 
   clearRoute(): void {
+    this.focusPoi = null;
     this.routePois.set([]);
     this.saveRoute([]);
     this.syncRouteVisuals();
@@ -464,8 +633,13 @@ export class MapService {
       essential: true,
     });
     this.selectedPoi.set(poi);
+    const group = this.poiGroupsById.get(poi.id) ?? [poi];
+    this.coLocatedPois.set(group);
     this.focusPoi = highlightBlink ? poi : null;
     this.syncRouteVisuals();
+    if (group.length > 1) {
+      this.syncPoiCalloutData(true);
+    }
   }
 
   private startRouteBlinkLoop(): void {
@@ -474,6 +648,9 @@ export class MapService {
     }
     let bright = true;
     this.routeBlinkTimer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
       if (!this.map || !this.map.getLayer('leonida-route-blips')) {
         return;
       }
@@ -490,12 +667,16 @@ export class MapService {
     const route = this.routePois();
     const stopFeatures = route.map((poi, index) => {
       const step = index + 1;
+      const color = this.getRouteStepColor(step);
+      const badgeIcon = `route-badge-${step}-${color.replace('#', '')}`;
+      this.ensureNumberBadgeImage(badgeIcon, String(step), color, '#120B1E', 9);
       return {
         type: 'Feature' as const,
         properties: {
           id: poi.id,
           step: String(step),
-          color: this.getRouteStepColor(step),
+          color,
+          badgeIcon,
           iconKey: getPoiItemMeta(poi.category, poi.name).id,
         },
         geometry: {
@@ -512,6 +693,7 @@ export class MapService {
           id: this.focusPoi.id,
           step: '',
           color: '#FFB458',
+          badgeIcon: '',
           iconKey: getPoiItemMeta(this.focusPoi.category, this.focusPoi.name).id,
         },
         geometry: {
@@ -557,9 +739,14 @@ export class MapService {
 
     if (stopFeatures.length > 0) {
       this.startRouteBlinkLoop();
-    } else if (this.routeBlinkTimer !== null) {
-      clearInterval(this.routeBlinkTimer);
-      this.routeBlinkTimer = null;
+    } else {
+      if (this.routeBlinkTimer !== null) {
+        clearInterval(this.routeBlinkTimer);
+        this.routeBlinkTimer = null;
+      }
+      if (this.map.getLayer('leonida-route-blips')) {
+        this.map.setPaintProperty('leonida-route-blips', 'icon-opacity', 1);
+      }
     }
   }
 
@@ -683,7 +870,7 @@ export class MapService {
       id: 'leonida-buildings-3d',
       type: 'fill-extrusion',
       source: 'leonida-buildings',
-      minzoom: 2.8,
+      minzoom: 3.6,
       layout: { visibility: this.is3DMode() ? 'visible' : 'none' },
       paint: {
         'fill-extrusion-color': ['get', 'color'],
@@ -709,22 +896,25 @@ export class MapService {
               resolve();
               return;
             }
-            const img = new Image(48, 48);
+            const iconPx = 96;
+            const img = new Image(iconPx, iconPx);
             img.onload = () => {
               try {
                 const canvas = document.createElement('canvas');
-                canvas.width = 48;
-                canvas.height = 48;
+                canvas.width = iconPx;
+                canvas.height = iconPx;
                 const ctx = canvas.getContext('2d');
                 if (ctx && !map.hasImage(imageId)) {
-                  ctx.drawImage(img, 0, 0, 48, 48);
-                  map.addImage(imageId, ctx.getImageData(0, 0, 48, 48), { pixelRatio: 2 });
+                  ctx.imageSmoothingEnabled = true;
+                  ctx.imageSmoothingQuality = 'high';
+                  ctx.drawImage(img, 0, 0, iconPx, iconPx);
+                  map.addImage(imageId, ctx.getImageData(0, 0, iconPx, iconPx), { pixelRatio: 3.5 });
                 }
               } catch {}
               resolve();
             };
             img.onerror = () => resolve();
-            img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildMapBlipSvg(blip))}`;
+            img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(buildMapBlipSvg(blip, iconPx))}`;
           }),
       ),
     );
@@ -769,33 +959,15 @@ export class MapService {
     });
 
     map.addLayer({
-      id: 'leonida-route-step-bg',
-      type: 'circle',
-      source: 'leonida-route-stops',
-      filter: ['!=', ['get', 'step'], ''],
-      paint: {
-        'circle-radius': 8.5,
-        'circle-color': ['get', 'color'],
-        'circle-stroke-width': 1.5,
-        'circle-stroke-color': '#120B1E',
-        'circle-translate': [11, -11],
-      },
-    });
-
-    map.addLayer({
-      id: 'leonida-route-step-num',
+      id: 'leonida-route-step-badge',
       type: 'symbol',
       source: 'leonida-route-stops',
-      filter: ['!=', ['get', 'step'], ''],
+      filter: ['!=', ['get', 'badgeIcon'], ''],
       layout: {
-        'text-field': ['get', 'step'],
-        'text-size': 10,
-        'text-allow-overlap': true,
-        'text-ignore-placement': true,
-        'text-offset': [1.1, -1.1],
-      },
-      paint: {
-        'text-color': '#120B1E',
+        'icon-image': ['get', 'badgeIcon'],
+        'icon-offset': [12, -12],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
       },
     });
 
@@ -803,7 +975,7 @@ export class MapService {
       type: 'geojson',
       data: poisToGeoJson(this.allPois),
       cluster: true,
-      clusterMaxZoom: 4.2,
+      clusterMaxZoom: 4,
       clusterRadius: 34,
     });
 
@@ -825,6 +997,8 @@ export class MapService {
         'circle-radius': ['step', ['get', 'point_count'], 16, 20, 21, 60, 26],
         'circle-stroke-width': 2,
         'circle-stroke-color': '#120B1E',
+        'circle-pitch-alignment': 'viewport',
+        'circle-pitch-scale': 'viewport',
       },
     });
 
@@ -836,6 +1010,8 @@ export class MapService {
       layout: {
         'text-field': ['get', 'point_count_abbreviated'],
         'text-size': 12,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
       },
       paint: {
         'text-color': '#FFF6F8',
@@ -855,12 +1031,13 @@ export class MapService {
         'icon-padding': 2,
         'text-field': ['step', ['zoom'], '', 3.5, ['get', 'name']],
         'text-size': 11,
-        'text-variable-anchor': ['top', 'bottom', 'left', 'right'],
-        'text-radial-offset': 1.5,
+        'text-anchor': 'top',
+        'text-offset': [0, 1.35],
         'text-max-width': 11,
         'text-optional': true,
       },
       paint: {
+        'icon-opacity': 0,
         'text-color': '#FFF6F8',
         'text-halo-color': '#120B1E',
         'text-halo-width': 1.8,
@@ -868,35 +1045,61 @@ export class MapService {
     });
 
     map.addLayer({
-      id: 'leonida-poi-stack-bg',
-      type: 'circle',
-      source: 'leonida-pois',
-      filter: ['all', ['!', ['has', 'point_count']], ['>', ['get', 'stackCount'], 1]],
-      paint: {
-        'circle-radius': 7.5,
-        'circle-color': '#F44E8F',
-        'circle-stroke-width': 1.5,
-        'circle-stroke-color': '#120B1E',
-        'circle-translate': [10, -10],
-      },
-    });
-
-    map.addLayer({
-      id: 'leonida-poi-stack-count',
+      id: 'leonida-poi-stack-badge',
       type: 'symbol',
       source: 'leonida-pois',
       filter: ['all', ['!', ['has', 'point_count']], ['>', ['get', 'stackCount'], 1]],
       layout: {
-        'text-field': ['get', 'stackLabel'],
-        'text-size': 9.5,
-        'text-allow-overlap': true,
-        'text-ignore-placement': true,
-        'text-offset': [1.0, -1.0],
+        'icon-image': ['get', 'stackBadgeIcon'],
+        'icon-offset': [11, -11],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
       },
       paint: {
-        'text-color': '#FFF6F8',
+        'icon-opacity': 0,
       },
     });
+  }
+
+  private ensureNumberBadgeImage(
+    imageId: string,
+    label: string,
+    bgColor: string,
+    textColor: string,
+    radiusPx: number,
+  ): void {
+    if (!this.map || this.map.hasImage(imageId) || typeof document === 'undefined') {
+      return;
+    }
+    const dpr = 2;
+    const size = Math.ceil((radiusPx + 3) * 2);
+    const canvas = document.createElement('canvas');
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return;
+    }
+    ctx.scale(dpr, dpr);
+    const cx = size / 2;
+    const cy = size / 2;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
+    ctx.fillStyle = bgColor;
+    ctx.fill();
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = '#120B1E';
+    ctx.stroke();
+
+    ctx.fillStyle = textColor;
+    ctx.font = `700 ${label.length > 1 ? 9 : 10.5}px Inter, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, cx, cy + 0.5);
+
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    this.map.addImage(imageId, imgData, { pixelRatio: dpr });
   }
 
   private bindPoiInteractions(map: MapLibreMap): void {
@@ -944,7 +1147,17 @@ export class MapService {
     });
 
     map.on('zoom', () => this.syncCustomPinSizes());
-    map.on('zoomend', () => this.syncPoiCalloutData());
+    map.on('zoomend', () => {
+      this.syncPoiCalloutData();
+      this.syncPoiOverlayMarkers();
+    });
+    map.on('move', () => this.repositionPoiOverlayMarkers());
+    map.on('moveend', () => this.syncPoiOverlayMarkers());
+    map.on('sourcedata', (e) => {
+      if (e.sourceId === 'leonida-pois' && e.isSourceLoaded) {
+        this.syncPoiOverlayMarkers();
+      }
+    });
 
     this.renderSavedCustomPins();
     this.syncRouteVisuals();
@@ -977,6 +1190,35 @@ export class MapService {
     }
     this.ngZone.runOutsideAngular(() => {
       this.map?.panBy([dx, dy], { duration: 0 });
+    });
+  }
+
+  orbitCameraBy(bearingDelta: number, pitchDelta: number): void {
+    if (!this.map) {
+      return;
+    }
+    this.ngZone.runOutsideAngular(() => {
+      if (!this.map) {
+        return;
+      }
+      if (bearingDelta !== 0) {
+        this.map.setBearing(this.map.getBearing() + bearingDelta);
+      }
+      if (pitchDelta !== 0) {
+        const nextPitch = Math.max(0, Math.min(65, this.map.getPitch() + pitchDelta));
+        this.map.setPitch(nextPitch);
+        if (nextPitch > 8 && !this.is3DMode()) {
+          this.ngZone.run(() => this.is3DMode.set(true));
+          this.map.setTerrain({ source: 'leonida-dem', exaggeration: 4 });
+          this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'visible');
+          this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'visible');
+        } else if (nextPitch <= 1 && this.is3DMode()) {
+          this.ngZone.run(() => this.is3DMode.set(false));
+          this.map.setTerrain(null);
+          this.map.setLayoutProperty('leonida-hillshade', 'visibility', 'none');
+          this.map.setLayoutProperty('leonida-buildings-3d', 'visibility', 'none');
+        }
+      }
     });
   }
 
@@ -1038,6 +1280,10 @@ export class MapService {
       marker.remove();
     }
     this.customPinMarkers.clear();
+    this.poiMarkerNodes.clear();
+    this.poiOverlayEl?.remove();
+    this.poiOverlayEl = null;
+    this.lastPinSize = -1;
     this.customPins.set([]);
     this.saveCustomPins([]);
   }
@@ -1205,7 +1451,15 @@ export class MapService {
   }
 
   private syncCustomPinSizes(): void {
+    this.syncPoiOverlaySizes();
+    if (this.customPinMarkers.size === 0) {
+      return;
+    }
     const size = this.getPinSizeForZoom();
+    if (size === this.lastPinSize) {
+      return;
+    }
+    this.lastPinSize = size;
     const fontSize = `${Math.round(size * 0.52)}px`;
     for (const marker of this.customPinMarkers.values()) {
       const el = marker.getElement();
@@ -1213,6 +1467,144 @@ export class MapService {
       el.style.height = `${size}px`;
       el.style.fontSize = fontSize;
     }
+  }
+
+  private ensurePoiOverlay(): HTMLElement | null {
+    if (!this.map || typeof this.map.getCanvasContainer !== 'function') {
+      return null;
+    }
+    if (!this.poiOverlayEl) {
+      const overlay = document.createElement('div');
+      overlay.className = 'leonida-poi-overlay';
+      this.map.getCanvasContainer().appendChild(overlay);
+      this.poiOverlayEl = overlay;
+    }
+    return this.poiOverlayEl;
+  }
+
+  private syncPoiOverlaySizes(): void {
+    if (this.poiMarkerNodes.size === 0) {
+      return;
+    }
+    const size = this.getPinSizeForZoom();
+    if (size === this.lastPoiOverlaySize) {
+      return;
+    }
+    this.lastPoiOverlaySize = size;
+    for (const entry of this.poiMarkerNodes.values()) {
+      entry.el.style.width = `${size}px`;
+      entry.el.style.height = `${size}px`;
+    }
+  }
+
+  private repositionPoiOverlayMarkers(): void {
+    if (!this.map || this.poiMarkerNodes.size === 0 || typeof this.map.project !== 'function') {
+      return;
+    }
+    const size = this.getPinSizeForZoom();
+    const sizeChanged = size !== this.lastPoiOverlaySize;
+    if (sizeChanged) {
+      this.lastPoiOverlaySize = size;
+    }
+    for (const entry of this.poiMarkerNodes.values()) {
+      const pt = this.map.project([entry.lng, entry.lat]);
+      entry.el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
+      if (sizeChanged) {
+        entry.el.style.width = `${size}px`;
+        entry.el.style.height = `${size}px`;
+      }
+    }
+  }
+
+  private syncPoiOverlayMarkers(): void {
+    if (
+      !this.map ||
+      typeof this.map.queryRenderedFeatures !== 'function' ||
+      !this.map.getLayer('leonida-pois-symbol')
+    ) {
+      return;
+    }
+    const overlay = this.ensurePoiOverlay();
+    if (!overlay) {
+      return;
+    }
+
+    const rendered = this.map.queryRenderedFeatures({ layers: ['leonida-pois-symbol'] });
+    const seen = new Set<string>();
+    const size = this.getPinSizeForZoom();
+    this.lastPoiOverlaySize = size;
+
+    for (const feature of rendered) {
+      const id = String(feature.properties?.['id'] ?? '');
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      const coords =
+        feature.geometry.type === 'Point'
+          ? (feature.geometry.coordinates as [number, number])
+          : null;
+      if (!coords) {
+        continue;
+      }
+      seen.add(id);
+
+      const iconKey = String(feature.properties?.['iconKey'] ?? 'landmark') as PoiBlipId;
+      const stackCount = Number(feature.properties?.['stackCount'] ?? 1);
+      const name = String(feature.properties?.['name'] ?? '');
+      const existing = this.poiMarkerNodes.get(id);
+      const pt = this.map.project(coords);
+
+      if (existing) {
+        existing.lng = coords[0];
+        existing.lat = coords[1];
+        existing.el.style.width = `${size}px`;
+        existing.el.style.height = `${size}px`;
+        existing.el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
+        if (existing.iconKey !== iconKey || existing.stackCount !== stackCount) {
+          existing.iconKey = iconKey;
+          existing.stackCount = stackCount;
+          this.renderPoiMarkerContent(existing.el, iconKey, stackCount);
+        }
+        continue;
+      }
+
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'leonida-poi-marker';
+      el.setAttribute('aria-label', name || id);
+      el.style.width = `${size}px`;
+      el.style.height = `${size}px`;
+      el.style.transform = `translate3d(${pt.x}px, ${pt.y}px, 0) translate(-50%, -50%)`;
+      this.renderPoiMarkerContent(el, iconKey, stackCount);
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.ngZone.run(() => {
+          const found = this.allPois.find((p) => p.id === id) ?? null;
+          if (found) {
+            this.selectPoi(found);
+          }
+        });
+      });
+
+      overlay.appendChild(el);
+      this.poiMarkerNodes.set(id, { el, iconKey, stackCount, lng: coords[0], lat: coords[1] });
+    }
+
+    for (const [id, entry] of this.poiMarkerNodes.entries()) {
+      if (!seen.has(id)) {
+        entry.el.remove();
+        this.poiMarkerNodes.delete(id);
+      }
+    }
+  }
+
+  private renderPoiMarkerContent(el: HTMLButtonElement, iconKey: PoiBlipId, stackCount: number): void {
+    const meta = POI_BLIP_CATALOG[iconKey] ?? POI_BLIP_CATALOG.landmark;
+    el.style.borderColor = meta.color;
+    const inner = renderLucideIconElements(meta.icon);
+    const stackHtml =
+      stackCount > 1 ? `<span class="leonida-poi-stack-pill">${stackCount}</span>` : '';
+    el.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#FFF6F8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision" aria-hidden="true">${inner}</svg>${stackHtml}`;
   }
 
   private applyPinVisual(el: HTMLElement, color: string, iconType: CustomPinIconType): void {
@@ -1266,6 +1658,7 @@ export class MapService {
     });
 
     this.customPinMarkers.set(pin.id, marker);
+    this.lastPinSize = -1;
   }
 
   private saveCustomPins(pins: CustomMapPin[]): void {
@@ -1302,16 +1695,13 @@ export class MapService {
     }
     const is3D = this.is3DMode();
     this.ngZone.runOutsideAngular(() => {
-      this.map?.stop();
-      requestAnimationFrame(() => {
-        this.map?.flyTo({
-          center: LEONIDA_MAP_CONFIG.initialCenter,
-          zoom: LEONIDA_MAP_CONFIG.initialZoom,
-          pitch: is3D ? 58 : 0,
-          bearing: 0,
-          duration: 500,
-          essential: true,
-        });
+      this.map?.flyTo({
+        center: LEONIDA_MAP_CONFIG.initialCenter,
+        zoom: LEONIDA_MAP_CONFIG.initialZoom,
+        pitch: is3D ? 58 : 0,
+        bearing: 0,
+        duration: 500,
+        essential: true,
       });
     });
   }
@@ -1326,20 +1716,47 @@ export class MapService {
     let lastDevPerfLogTime = lastSampleTime;
 
     const tick = (now: number): void => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        frames = 0;
+        lastSampleTime = now;
+        lastDevPerfLogTime = now;
+        this.lowFpsStartTime = null;
+        this.fpsRafId = requestAnimationFrame(tick);
+        return;
+      }
+
       frames++;
       const elapsed = now - lastSampleTime;
 
       if (elapsed >= 1000) {
+        if (elapsed > 3000) {
+          frames = 0;
+          lastSampleTime = now;
+          this.fpsRafId = requestAnimationFrame(tick);
+          return;
+        }
         const fps = (frames * 1000) / elapsed;
         frames = 0;
         lastSampleTime = now;
+
+        const roundedFps = Math.round(fps);
+        const dropMeta =
+          roundedFps < 60
+            ? {
+                pitch: Math.round(this.map?.getPitch() ?? 0),
+                zoom: Number((this.map?.getZoom() ?? 0).toFixed(2)),
+                isMoving: this.isMapMoving,
+                visiblePois: this.visiblePoisCount(),
+              }
+            : undefined;
 
         if (isDevMode() && now - lastDevPerfLogTime >= 5000) {
           lastDevPerfLogTime = now;
           this.telemetry.capture({
             level: 'perf',
             source: 'rum',
-            message: `fps_sample:${Math.round(fps)}`,
+            message: `fps_sample:${roundedFps}`,
+            ...(dropMeta ? { meta: dropMeta } : {}),
           });
         }
 
@@ -1350,7 +1767,8 @@ export class MapService {
             this.telemetry.capture({
               level: 'warn',
               source: 'rum',
-              message: `low_fps:${Math.round(fps)}`,
+              message: `low_fps:${roundedFps}`,
+              ...(dropMeta ? { meta: dropMeta } : {}),
             });
           }
         } else {
@@ -1365,6 +1783,10 @@ export class MapService {
   }
 
   destroy(): void {
+    if (this.routeBlinkTimer !== null) {
+      clearInterval(this.routeBlinkTimer);
+      this.routeBlinkTimer = null;
+    }
     if (this.fpsRafId !== null) {
       cancelAnimationFrame(this.fpsRafId);
       this.fpsRafId = null;

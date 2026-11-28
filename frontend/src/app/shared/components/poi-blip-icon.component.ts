@@ -1,9 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { LucideAngularModule } from 'lucide-angular';
 import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category-icons';
 
 @Component({
   selector: 'app-poi-blip-icon',
   standalone: true,
+  imports: [LucideAngularModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @let m = meta();
@@ -13,34 +15,27 @@ import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category
         [style.width.px]="size()"
         [style.height.px]="size()"
         [style.borderColor]="m.color"
-        [style.boxShadow]="'0 0 10px ' + m.color + '40'"
+        [style.boxShadow]="'inset 0 1px 0 rgba(255, 246, 248, 0.22), 0 0 10px ' + m.color + '44'"
         aria-hidden="true"
       >
-        <svg
-          [attr.width]="size() * 0.56"
-          [attr.height]="size() * 0.56"
-          viewBox="0 0 24 24"
-          fill="none"
-        >
-          @for (shape of m.shapes; track $index) {
-            <path [attr.d]="shape.d" fill="#FFF6F8" [attr.fill-opacity]="shape.opacity ?? 1" />
-          }
-        </svg>
+        <lucide-icon
+          [img]="m.icon"
+          [size]="size() * 0.56"
+          [strokeWidth]="2.1"
+          color="#FFF6F8"
+          class="blip-lucide"
+        />
       </span>
     } @else {
-      <svg
+      <lucide-icon
+        [img]="m.icon"
+        [size]="size()"
+        [strokeWidth]="2.1"
+        [color]="m.color"
         class="blip-glyph"
-        [attr.width]="size()"
-        [attr.height]="size()"
-        viewBox="0 0 24 24"
-        fill="none"
         [style.filter]="'drop-shadow(0 0 4px ' + m.color + '66)'"
         aria-hidden="true"
-      >
-        @for (shape of m.shapes; track $index) {
-          <path [attr.d]="shape.d" [attr.fill]="m.color" [attr.fill-opacity]="shape.opacity ?? 1" />
-        }
-      </svg>
+      />
     }
   `,
   styles: [
@@ -53,17 +48,22 @@ import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category
       }
 
       .blip-badge {
+        box-sizing: border-box;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         border-radius: 50%;
-        background: radial-gradient(circle at 35% 30%, #24153d 0%, #120b1e 100%);
+        background: radial-gradient(circle at 35% 28%, #2d1a4e 0%, #10081b 100%);
         border: 1.5px solid;
         flex-shrink: 0;
       }
 
+      .blip-lucide,
       .blip-glyph {
-        display: block;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 0;
         flex-shrink: 0;
       }
     `,
