@@ -28,6 +28,8 @@ import {
   Sun,
   Swords,
   Trees,
+  Trophy,
+  Zap,
 } from 'lucide-angular';
 
 export type PoiBlipId =
@@ -58,7 +60,9 @@ export type PoiBlipId =
   | 'nature'
   | 'fuel'
   | 'anchor'
-  | 'coffee';
+  | 'coffee'
+  | 'stunt'
+  | 'activity';
 
 export interface PoiBlipMeta {
   id: PoiBlipId;
@@ -96,6 +100,8 @@ export const POI_BLIP_CATALOG: Record<PoiBlipId, PoiBlipMeta> = {
   fuel: { id: 'fuel', color: '#FACC15', bg: 'rgba(250, 204, 21, 0.16)', icon: Fuel },
   anchor: { id: 'anchor', color: '#60A5FA', bg: 'rgba(96, 165, 250, 0.16)', icon: Anchor },
   coffee: { id: 'coffee', color: '#FB923C', bg: 'rgba(251, 146, 60, 0.16)', icon: Coffee },
+  stunt: { id: 'stunt', color: '#FBBF24', bg: 'rgba(251, 191, 36, 0.16)', icon: Zap },
+  activity: { id: 'activity', color: '#38BDF8', bg: 'rgba(56, 189, 248, 0.16)', icon: Trophy },
 };
 
 export const ALL_POI_BLIPS: readonly PoiBlipMeta[] = Object.values(POI_BLIP_CATALOG);
@@ -107,6 +113,7 @@ const EXACT_CATEGORY_MAP = new Map<string, PoiBlipId>([
   ['lojas', 'shop'],
   ['missoes da historia', 'story'],
   ['veiculos e oficinas', 'vehicle'],
+  ['veiculos especiais', 'vehicle'],
   ['pontos de referencia', 'landmark'],
   ['pontos-chave', 'landmark'],
   ['easter eggs', 'easter'],
@@ -123,6 +130,7 @@ const EXACT_CATEGORY_MAP = new Map<string, PoiBlipId>([
   ['policia e bombeiros', 'police'],
   ['flamingos', 'flamingo'],
   ['crimes e assaltos', 'crime'],
+  ['operacoes ilegais', 'crime'],
   ['pontos de meditacao', 'meditation'],
   ['armas', 'weapon'],
   ['armas unicas', 'weapon_pro'],
@@ -130,9 +138,14 @@ const EXACT_CATEGORY_MAP = new Map<string, PoiBlipId>([
   ['acessiveis', 'enterable'],
   ['eventos', 'event'],
   ['natureza', 'nature'],
+  ['saltos e acrobacias', 'stunt'],
+  ['atividades e esportes', 'activity'],
 ]);
 
 const KEYWORD_RULES: Array<{ keywords: string[]; id: PoiBlipId }> = [
+  { keywords: ['salto', 'acrobacia', 'stunt'], id: 'stunt' },
+  { keywords: ['atividade', 'esporte', 'corrida', 'pesca'], id: 'activity' },
+  { keywords: ['operacoes', 'ilegal', 'ilegais'], id: 'crime' },
   { keywords: ['arma unica', 'unicas'], id: 'weapon_pro' },
   { keywords: ['arma'], id: 'weapon' },
   { keywords: ['hotel', 'hoteis', 'resort', 'motel'], id: 'hotel' },
@@ -221,6 +234,17 @@ export function getPoiItemMeta(category: string, itemName?: string): PoiBlipMeta
     }
   }
   return getPoiCategoryMeta(category);
+}
+
+export function getPoiIconUrl(iconName?: string): string | null {
+  if (!iconName) {
+    return null;
+  }
+  const clean = iconName.trim();
+  if (!/^[a-z0-9_]+$/i.test(clean)) {
+    return null;
+  }
+  return `icons/gtavi/${clean}.png`;
 }
 
 export function renderLucideIconElements(icon: LucideIconData): string {

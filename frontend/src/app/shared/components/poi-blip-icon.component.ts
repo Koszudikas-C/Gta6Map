@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { LucideAngularModule } from 'lucide-angular';
-import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category-icons';
+import { getPoiCategoryMeta, getPoiIconUrl, getPoiItemMeta } from '../../core/data/poi-category-icons';
 
 @Component({
   selector: 'app-poi-blip-icon',
@@ -9,6 +9,7 @@ import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @let m = meta();
+    @let pngUrl = resolvedIconUrl();
     @if (variant() === 'badge') {
       <span
         class="blip-badge"
@@ -18,13 +19,17 @@ import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category
         [style.boxShadow]="'inset 0 1px 0 rgba(255, 246, 248, 0.22), 0 0 10px ' + m.color + '44'"
         aria-hidden="true"
       >
-        <lucide-icon
-          [img]="m.icon"
-          [size]="size() * 0.56"
-          [strokeWidth]="2.1"
-          color="#FFF6F8"
-          class="blip-lucide"
-        />
+        @if (pngUrl) {
+          <img [src]="pngUrl" alt="" class="blip-png" decoding="async" loading="lazy" />
+        } @else {
+          <lucide-icon
+            [img]="m.icon"
+            [size]="size() * 0.56"
+            [strokeWidth]="2.1"
+            color="#FFF6F8"
+            class="blip-lucide"
+          />
+        }
       </span>
     } @else {
       <lucide-icon
@@ -58,6 +63,14 @@ import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category
         flex-shrink: 0;
       }
 
+      .blip-png {
+        width: 66%;
+        height: 66%;
+        object-fit: contain;
+        display: block;
+        pointer-events: none;
+      }
+
       .blip-lucide,
       .blip-glyph {
         display: inline-flex;
@@ -72,8 +85,11 @@ import { getPoiCategoryMeta, getPoiItemMeta } from '../../core/data/poi-category
 export class PoiBlipIconComponent {
   readonly category = input.required<string>();
   readonly itemName = input<string>('');
+  readonly iconName = input<string>('');
   readonly size = input<number>(28);
   readonly variant = input<'badge' | 'glyph'>('badge');
+
+  readonly resolvedIconUrl = computed(() => getPoiIconUrl(this.iconName()));
 
   readonly meta = computed(() => {
     const name = this.itemName();
